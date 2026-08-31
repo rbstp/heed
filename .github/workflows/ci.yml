@@ -31,3 +31,6 @@ jobs:
 
       - name: check release compiles
         run: swift build -c release
+
+      - name: check packaging
+        run: make check-package

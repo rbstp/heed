@@ -17,13 +17,31 @@ EXECUTABLE  := $(APP)/Contents/MacOS/$(APP_NAME)
 AGENT_PLIST := $(HOME)/Library/LaunchAgents/$(BUNDLE_ID).plist
 LOG         := $(HOME)/Library/Logs/heed.log
 DOMAIN      := gui/$(shell id -u)
-SIGN_ID     := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q '$(CERT_NAME)' && printf '%s' '$(CERT_NAME)' || printf -- '-')
+# Resolved to the certificate's hash, not its name, and empty when it is not found.
+#
+# Matching a name is ambiguous once two identities share one, and the previous version collapsed any
+# failure -- locked keychain, missing tool, ambiguous match -- into ad-hoc signing, which silently
+# recreated the permission loss the certificate exists to prevent. Signing now refuses rather than
+# quietly degrading; ADHOC=1 asks for ad-hoc on purpose.
+SIGN_ID     := $(shell security find-identity -v -p codesigning 2>/dev/null \
+                 | grep -F '"$(CERT_NAME)"' | head -1 | awk '{print $$2}')
+CODESIGN_ID := $(if $(SIGN_ID),$(SIGN_ID),-)
+
+# The generated plists are built with sed, which cannot be trusted with these characters. Refuse
+# rather than emit a corrupt plist that fails in some confusing way later.
+define check_paths
+@case '$(EXECUTABLE)$(LOG)' in \
+	*['&|<>']*) echo "a path contains a character that would corrupt the plists: $(EXECUTABLE)"; \
+	            exit 1;; \
+esac
+endef
 BUILT       := .build/release/$(APP_NAME)
 ICON_SRC    := Tools/make-icon.swift
 ICNS        := .build/$(APP_NAME).icns
+STAGE       := .build/stage
 
-.PHONY: all build test bundle install install-agent uninstall restart logs probe \
-        icon cert reset-permission requirement clean
+.PHONY: all build test bundle install install-agent uninstall restart logs logs-clear probe \
+        icon cert check-package reset-permission requirement clean
 
 all: build
 
@@ -39,7 +57,8 @@ test:
 ## a head-on cube below 32px, where an isometric one collapses into a green ring.
 icon: $(ICNS)
 
-$(ICNS): $(ICON_SRC)
+# Depends on the Makefile too: it defines the size/name matrix, so changing that must rebuild.
+$(ICNS): $(ICON_SRC) Makefile
 	@rm -rf .build/$(APP_NAME).iconset
 	@mkdir -p .build/$(APP_NAME).iconset
 	@set -e; for spec in 16:16x16 32:16x16@2x 32:32x32 64:32x32@2x 128:128x128 \
@@ -52,6 +71,13 @@ $(ICNS): $(ICON_SRC)
 
 ## Assemble and sign the .app in place under $(INSTALL_DIR).
 bundle: build $(ICNS)
+	@if [ -z "$(SIGN_ID)" ] && [ "$(ADHOC)" != "1" ]; then \
+		echo "no code-signing identity named \"$(CERT_NAME)\" was found. Either:"; \
+		echo "  make cert             create one, so the permission survives rebuilds"; \
+		echo "  make bundle ADHOC=1   sign ad-hoc deliberately (permission resets each rebuild)"; \
+		exit 1; \
+	fi
+	$(check_paths)
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	cp "$(BUILT)" "$(EXECUTABLE)"
@@ -60,10 +86,13 @@ bundle: build $(ICNS)
 	    -e 's|@APP_NAME@|$(APP_NAME)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \
 	    Resources/Info.plist > "$(APP)/Contents/Info.plist"
-	codesign --force --sign "$(SIGN_ID)" --identifier "$(BUNDLE_ID)" "$(APP)"
-	@echo "built $(APP), signed by $(if $(filter -,$(SIGN_ID)),ad-hoc,$(SIGN_ID))"
+	codesign --force --sign "$(CODESIGN_ID)" --identifier "$(BUNDLE_ID)" "$(APP)"
+	@echo "built $(APP), signed by $(if $(SIGN_ID),$(CERT_NAME),ad-hoc)"
 
-install: bundle install-agent
+# install-agent runs from the recipe rather than as a second prerequisite: as prerequisites they are
+# independent, so `make -j install` could bootstrap the agent before the bundle existed.
+install: bundle
+	@$(MAKE) --no-print-directory install-agent
 	@echo
 	@echo "Installed. If this is the first run, grant Accessibility to $(APP_NAME) in"
 	@echo "System Settings > Privacy & Security > Accessibility."
@@ -75,6 +104,7 @@ install: bundle install-agent
 ## contents also depend on APP_NAME and $(HOME), so a timestamp comparison against the template
 ## alone would happily leave a plist pointing at an app path that no longer exists.
 install-agent:
+	$(check_paths)
 	mkdir -p "$(HOME)/Library/LaunchAgents"
 	sed -e 's|@BUNDLE_ID@|$(BUNDLE_ID)|g' \
 	    -e 's|@EXECUTABLE@|$(EXECUTABLE)|g' \
@@ -90,6 +120,11 @@ restart:
 logs:
 	@touch "$(LOG)"; tail -f "$(LOG)"
 
+## The log is append-only with no rotation: negligible with verbose off, not with it on. Truncated
+## rather than deleted, so the running agent keeps its open handle.
+logs-clear:
+	@: > "$(LOG)"; echo "cleared $(LOG)"
+
 ## What does the agent see under the pointer right now? Runs standalone; does not touch the agent.
 probe: build
 	@"$(BUILT)" --probe
@@ -97,8 +132,9 @@ probe: build
 ## Create a self-signed code-signing identity so the Accessibility grant survives rebuilds.
 ##
 ## Scoped to code signing only, and trusted in the login keychain rather than system-wide, so it
-## cannot vouch for anything else. Remove it with:
-##   security delete-identity -c "$(CERT_NAME)" ~/Library/Keychains/login.keychain-db
+## cannot vouch for anything else. Remove it with (-t also removes the trust setting, which -c
+## alone leaves behind):
+##   security delete-identity -t -c "$(CERT_NAME)" ~/Library/Keychains/login.keychain-db
 ##
 ## openssl's own PKCS#12 defaults are rejected by Apple's importer ("MAC verification failed"),
 ## hence the explicit legacy PBE and SHA1 MAC.
@@ -108,6 +144,7 @@ cert:
 	else \
 		set -e; \
 		tmp=$$(mktemp -d); \
+		trap 'rm -rf "$$tmp"' EXIT INT TERM; \
 		printf '%s\n' '[req]' 'distinguished_name = dn' 'x509_extensions = v3' 'prompt = no' \
 			'[dn]' 'CN = $(CERT_NAME)' \
 			'[v3]' 'basicConstraints = critical,CA:false' \
@@ -123,9 +160,28 @@ cert:
 			-P heedtmp -T /usr/bin/codesign; \
 		security add-trusted-cert -r trustRoot -p codeSign \
 			-k "$(HOME)/Library/Keychains/login.keychain-db" "$$tmp/cert.pem"; \
-		rm -rf "$$tmp"; \
 		echo "created and trusted \"$(CERT_NAME)\" -- now run: make install"; \
 	fi
+
+## Package smoke test: assemble the bundle and the agent plist into a staging directory and check
+## them. Deliberately ad-hoc and staged, so it touches neither the installed app nor launchd, and can
+## therefore run in CI -- where the compile alone would not catch a broken plist, a missing icon or a
+## signature that does not verify.
+check-package:
+	@rm -rf "$(STAGE)"
+	@$(MAKE) --no-print-directory bundle ADHOC=1 INSTALL_DIR="$(STAGE)"
+	codesign --verify --deep --strict "$(STAGE)/$(APP_NAME).app"
+	plutil -lint "$(STAGE)/$(APP_NAME).app/Contents/Info.plist"
+	@sed -e 's|@BUNDLE_ID@|$(BUNDLE_ID)|g' \
+	     -e 's|@EXECUTABLE@|$(STAGE)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)|g' \
+	     -e 's|@LOG@|$(STAGE)/heed.log|g' \
+	     LaunchAgent/agent.plist.in > "$(STAGE)/agent.plist"
+	plutil -lint "$(STAGE)/agent.plist"
+	@test -s "$(STAGE)/$(APP_NAME).app/Contents/Resources/$(APP_NAME).icns" \
+		|| { echo "the bundle has no icon"; exit 1; }
+	@"$(STAGE)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)" --probe >/dev/null 2>&1 \
+		|| echo "note: --probe exited non-zero, expected without an Accessibility grant"
+	@echo "package checks passed"
 
 ## Clear the stale Accessibility grant after a rebuild, so macOS prompts again.
 reset-permission:

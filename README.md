@@ -31,6 +31,7 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 | `pollMs` | `40` | Cursor sampling interval. |
 | `raise` | `true` | Also raise the window. See *Focus and raise* below. |
 | `typingCooldownMs` | `500` | Ignore the pointer for this long after a keystroke. |
+| `clickGraceMs` | `150` | Ignore the pointer for this long after a mouse press. Short: unlike typing, this exists only to cover clicks that begin and end between two polls, which an instantaneous button check cannot see. |
 | `entryMotionPx` | `6` | Pointer travel (in points, over roughly the last 200 ms) required before a *different* window may take focus. Stops windows that appear under a still pointer from taking it. `0` disables. |
 | `verifyTimeoutMs` | `100` | How long to wait for focus to land before giving up on this attempt. Spent with the agent blocked, so it is deliberately tight — the mechanism that works confirms in roughly 25 ms, and a failure just retries on the next tick. |
 | `ignoreWhenCommandHeld` | `true` | Ignore the pointer while ⌘ is down, so Cmd-Tab is not fought. |
@@ -39,6 +40,9 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 | `excludedWindowTitles` | `[]` | Case-insensitive **regular expressions**; a window whose title matches any of them is never focused. Applies to every app, and adds to the built-in rules below. |
 | `verbose` | `false` | Log every decision. |
 | `excludedBundleIDs` | `[]` | Extra apps to never focus. **Added to** the built-in list, not replacing it. |
+
+Every numeric key is clamped to a sane range and says so in the log when it clamps, so a stray zero
+cannot park the agent.
 
 ```sh
 defaults write io.github.rbstp.heed dwellMs -int 200
@@ -86,7 +90,8 @@ result
   already focused:    true
 ```
 
-`make logs` with `verbose true` shows the running decisions, including which focus mechanism each app
+The log is append-only with no rotation — negligible with `verbose` off, less so with it on;
+`make logs-clear` truncates it in place. `make logs` with `verbose true` shows the running decisions, including which focus mechanism each app
 responded to, how long it took to land, and why a window was skipped.
 
 ## Signing, and why it decides whether you keep re-granting
@@ -120,10 +125,18 @@ Two things to expect:
 - Switching from ad-hoc to certificate signing changes the app's identity, so you grant Accessibility
   one more time after `make cert`. After that it sticks.
 
-To remove the identity later:
+If the identity is missing, `make bundle` **refuses** rather than quietly falling back to ad-hoc —
+that fallback would silently reinstate the permission loss the certificate exists to prevent. Ad-hoc
+is available deliberately:
 
 ```sh
-security delete-identity -c "Heed Local Signing" ~/Library/Keychains/login.keychain-db
+make bundle ADHOC=1
+```
+
+To remove the identity later (`-t` also removes the trust setting, which `-c` alone leaves behind):
+
+```sh
+security delete-identity -t -c "Heed Local Signing" ~/Library/Keychains/login.keychain-db
 ```
 
 ### Without a certificate
@@ -277,6 +290,19 @@ the system actually resolves before chasing it:
 ```sh
 killall iconservicesagent      # then reopen the window showing it
 ```
+
+## Development
+
+```sh
+make test             # the FFMCore logic; builds in Swift 6 language mode
+make check-package    # assemble and verify a staged bundle without touching the install
+make probe            # what the agent sees under the pointer right now
+make probe X Y        # ...or at a screen point you would rather not hover
+```
+
+CI runs the tests, a release compile and `check-package` on pull requests. `check-package` exists
+because compiling proves very little about this project: a broken plist, a missing icon or a
+signature that does not verify all build perfectly well.
 
 ## Prior art
 

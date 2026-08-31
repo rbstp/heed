@@ -8,7 +8,7 @@ let package = Package(
         // Pure state machine: no Accessibility, no AppKit. Unit-testable in isolation.
         .target(
             name: "FFMCore",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
             name: "Heed",

@@ -34,6 +34,14 @@ final class HotkeySpecTests: XCTestCase {
         XCTAssertNil(HotkeySpec(""))
     }
 
+    /// Shift is not a chord: `shift+a` is how a capital A is typed, so accepting it would take
+    /// uppercase away system-wide -- exactly what the modifier rule exists to prevent.
+    func testRejectsShiftAsTheOnlyModifier() {
+        XCTAssertNil(HotkeySpec("shift+a"))
+        XCTAssertNil(HotkeySpec("⇧h"))
+        XCTAssertNotNil(HotkeySpec("cmd+shift+a"), "shift alongside a real modifier is fine")
+    }
+
     func testRejectsModifiersWithNoKey() {
         XCTAssertNil(HotkeySpec("cmd"))
         XCTAssertNil(HotkeySpec("cmd+ctrl"))

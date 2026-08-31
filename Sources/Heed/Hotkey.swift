@@ -45,12 +45,21 @@ final class Hotkey {
         if spec.modifiers.contains(.option) { carbonModifiers |= UInt32(optionKey) }
         if spec.modifiers.contains(.shift) { carbonModifiers |= UInt32(shiftKey) }
 
+        // Exclusive, which decides what happens on a clash rather than leaving it to chance. A
+        // non-exclusive registration -- the zero default -- succeeds even when another app already
+        // holds the combination, and then *both* actions run on every press, which is a worse
+        // outcome than either app winning. Exclusive registration is refused instead, and refusal
+        // is something that can be reported. The SDK spells this out at CarbonEvents.h's
+        // kEventHotKeyExclusive.
         let identifier = EventHotKeyID(signature: OSType(0x68_65_65_64), id: 1)   // 'heed'
         let registered = RegisterEventHotKey(
-            UInt32(spec.keyCode), carbonModifiers, identifier, GetApplicationEventTarget(), 0,
-            &reference
+            UInt32(spec.keyCode), carbonModifiers, identifier, GetApplicationEventTarget(),
+            UInt32(kEventHotKeyExclusive), &reference
         )
         guard registered == noErr, reference != nil else {
+            // Unregister anything a partial failure left behind before dropping the reference.
+            if let reference { UnregisterEventHotKey(reference) }
+            reference = nil
             RemoveEventHandler(handler)
             handler = nil
             // -9878 is eventHotKeyExistsErr, which is the answer worth naming: the combination is

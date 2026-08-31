@@ -67,8 +67,10 @@ launchctl bootout gui/$(id -u)/io.github.rbstp.heed
 pointer across other windows, and with focus following the pointer, that moves focus on the way to
 the switch. The combination is registered with Carbon rather than watched for, so pressing it is
 consumed instead of also landing in whatever you were typing, and it needs no Accessibility grant —
-it works while Heed is still waiting for one, which is when you are most likely to want it. If
-another app already owns the combination, the log says so and none is registered.
+it works while Heed is still waiting for one, which is when you are most likely to want it. The
+registration is *exclusive*: a hotkey registered the ordinary way still succeeds when another app
+already holds the combination, and then both actions fire on every press. Refused is the better
+answer, and the log names the clash so you can pick another.
 
 ```sh
 defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f'   # or '' for none
@@ -76,8 +78,8 @@ make restart
 ```
 
 Modifier names are forgiving (`cmd`, `command`, `⌘`, and `+`, `-` or a space between), and at least
-one modifier is required — a bare key would be swallowed system-wide, starting with your ability to
-type it. A combination that cannot be parsed is refused with a log line rather than quietly
+one modifier that is not shift is required — a bare key would be swallowed system-wide, starting
+with your ability to type it, and `shift+a` is not a chord, it is how a capital A is typed. A combination that cannot be parsed is refused with a log line rather than quietly
 registering some other key; `Tests/FFMCoreTests/HotkeySpecTests.swift` covers that.
 
 To keep the menu bar as it was, with the hotkey and `defaults write enabled` as the switches:
@@ -307,10 +309,19 @@ what this costs is wakeups rather than latency.
 
 Movement is not the only thing worth waiting for, so the loop also stays fast while a dwell is
 running, while a hit test has been armed by a suppression or a Space change, and while an
-unresponsive app's circuit breaker is still counting down. That last one matters more than it
-sounds: a block expiring changes what is focusable with nothing to announce it.
-`DwellMachine.needsTick` is the tested half of that decision. The heartbeat is the safety net — if
-the monitor never fires, everything still works, just up to `idlePollMs` late.
+unresponsive app's circuit breaker or hit-test cooldown is still counting down — a deadline
+expiring changes what is focusable with nothing to announce it. `DwellMachine.needsTick` is the
+tested half of that decision.
+
+The harder half is input the loop never saw. A whole suppression can begin and end between two
+heartbeats — press Cmd-Tab with the pointer parked and the modifier, the keystroke and its cooldown
+are over before the next one — where the old loop always sampled it and armed a hit test. Watching
+the keyboard for that would mean a second permission this program deliberately does not ask for, so
+the question is asked backwards instead: an idling tick checks whether any input is newer than the
+previous tick, and re-derives if so. That needs no monitor and covers every kind of input at once.
+What is left is bounded rather than eliminated: an event arriving in the moment between the loop
+deciding to idle and the monitor being told, or delivered to Heed's own status item, waits for the
+heartbeat.
 
 Confirmation reads focus back rather than trusting return codes, because a successful write proves
 nothing here. Three measurements shaped this, and each was the opposite of what the API surface

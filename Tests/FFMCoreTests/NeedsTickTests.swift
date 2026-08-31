@@ -35,9 +35,12 @@ final class NeedsTickTests: XCTestCase {
         XCTAssertFalse(m.needsTick)
     }
 
-    /// The case that matters most. Suppression arms a hit test, and that test is what acquires the
-    /// window the pointer is already resting on once typing stops. Going quiet with it outstanding
-    /// would defer it to the next heartbeat.
+    /// The case that matters most for the caller's scheduling: suppression arms a hit test, and
+    /// going quiet with it outstanding would defer that test to the next heartbeat.
+    ///
+    /// What the armed test then *decides* is not this machine's business and is not asserted here.
+    /// The agent can still refuse the target it finds -- a window the pointer drifted onto while
+    /// typing has no recent travel behind it, and the entry-motion guard rejects it on purpose.
     func testBusyAfterSuppressionArmsAHitTest() {
         var m = machine()
         _ = tick(&m, .suppressing)

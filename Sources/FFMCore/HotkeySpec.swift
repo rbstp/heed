@@ -18,9 +18,10 @@ public struct HotkeySpec: Equatable, Sendable {
 
     /// Parses forms like `cmd+ctrl+h`, `Command-Control-H`, `⌘⌃H`.
     ///
-    /// Returns nil for anything it cannot turn into exactly one key plus at least one modifier. The
-    /// modifier requirement is not pedantry: a hotkey without one would swallow that key everywhere
-    /// on the system, and the first thing you would lose is the ability to type it.
+    /// Returns nil for anything it cannot turn into exactly one key plus at least one modifier that
+    /// is not shift. That rule is not pedantry: a hotkey without a modifier would swallow that key
+    /// everywhere on the system, and the first thing you would lose is the ability to type it.
+    /// Shift does not count, because `shift+a` is not a chord -- it is how a capital A is typed.
     public init?(_ text: String) {
         // Symbols are accepted with or without separators (⌘⌃H), so they are expanded to tokens
         // first; everything else splits on the usual separators.
@@ -43,7 +44,7 @@ public struct HotkeySpec: Equatable, Sendable {
             }
         }
 
-        guard !found.isEmpty,
+        guard found.contains(where: { $0 != .shift }),
               let name = keyToken.flatMap({ HotkeySpec.keyAliases[$0] ?? $0 }),
               let code = HotkeySpec.keyCodes[name]
         else { return nil }

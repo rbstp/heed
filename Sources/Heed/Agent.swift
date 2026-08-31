@@ -21,12 +21,15 @@ final class Agent {
     private var hotkey: Hotkey?
     private var shortcut: HotkeySpec?
 
-    /// What the timer is currently scheduled at, so retiming is a no-op when nothing changed.
+    /// What the timer is currently scheduled at, so retiming is a no-op when nothing changed, and
+    /// when the last tick ran, which is how an idling tick tells that it missed something.
     private var interval: Double = 0
+    private var lastTickAt: Double = 0
     /// Main thread only. Mirrors "the loop is idling, wake it", so a mouse event costs one bool test
     /// rather than a dispatch hop -- and events arrive far faster than the loop ever ticked.
     private var wantsMouseWake = false
     private var mouseMonitor: Any?
+    private var observersInstalled = false
 
     private var lastCursor = CGPoint(x: CGFloat.infinity, y: CGFloat.infinity)
     private var pendingInvalidation = false
@@ -268,12 +271,39 @@ final class Agent {
     private func tick() {
         guard config.enabled else { return }
 
+        let sinceLastTick = lastTickAt > 0 ? now - lastTickAt : 0
+        lastTickAt = now
+
         // A circuit-breaker block expiring changes what is focusable, but nothing moves the pointer
         // to announce it. Without re-arming here, a stationary pointer over a recovered app would
         // never hit-test again: the forced test that `noteFailure` armed was already spent on the
         // tick that found the app still blocked.
         if let soonest = blockedUntil.values.min(), now >= soonest {
             blockedUntil = blockedUntil.filter { $0.value > now }
+            machine.invalidate()
+        }
+
+        // And the hit-test cooldown, for the same reason: it was spending its two seconds waiting
+        // for a deadline and then never performing the retry it waited for.
+        if hitTestCooldownUntil > 0, now >= hitTestCooldownUntil {
+            hitTestCooldownUntil = 0
+            machine.invalidate()
+        }
+
+        // Same problem, and the reason idling is not simply "wake on mouse events".
+        //
+        // A whole suppression can begin and end between two heartbeats: press Cmd-Tab with the
+        // pointer parked, and the command held, the keystroke and its cooldown are all over before
+        // the next one. The 40ms loop always saw that and armed a hit test; an idling loop sees a
+        // quiet `.normal` tick and would leave focus wherever the keyboard put it, sometimes -- and
+        // "sometimes" is the worst of the options, since it depends on where the heartbeat landed.
+        //
+        // Watching the keyboard for it is the obvious fix and the wrong one: a global key monitor
+        // is a second permission and a shape this program should not have. So the question is asked
+        // backwards instead -- is any input newer than our last tick? -- which needs no monitor and
+        // covers every kind of input at once.
+        if sinceLastTick > config.poll * 2, secondsSinceAny(of: suppressingInputs) < sinceLastTick {
+            Log.debug("input arrived while idling; re-deriving")
             machine.invalidate()
         }
 
@@ -388,8 +418,11 @@ final class Agent {
             return .suppressing   // Cmd-Tab in progress
         }
 
-        // Only worth a round trip while something is actually pending.
-        if config.menuGuard, cursorMoved || machine.hasCandidate, overlayPresent() {
+        // Only worth a round trip while something is actually pending -- which includes a hit test
+        // armed by the previous tick. Keyed on `hasCandidate` alone, a suppressing tick cleared the
+        // candidate and the next tick stopped checking, so the still-open menu was no longer seen
+        // and the armed test could move focus underneath it.
+        if config.menuGuard, cursorMoved || machine.needsTick, overlayPresent() {
             return .suppressing
         }
 
@@ -401,6 +434,13 @@ final class Agent {
     private let deliberateMouseEvents: [CGEventType] = [
         .leftMouseDown, .rightMouseDown, .otherMouseDown,
         .leftMouseUp, .rightMouseUp, .otherMouseUp,
+    ]
+
+    /// Every input that can start a suppression, so an idling tick can tell whether one ran its
+    /// course while the loop was not looking. `flagsChanged` is in here for Cmd-Tab, which can
+    /// begin and end without a single keyDown reaching this list.
+    private lazy var suppressingInputs: [CGEventType] = deliberateMouseEvents + [
+        .keyDown, .flagsChanged,
     ]
 
     private func secondsSinceAny(of types: [CGEventType]) -> Double {
@@ -826,6 +866,12 @@ final class Agent {
     // MARK: - System events
 
     private func observeSystemEvents() {
+        // Main thread, and once: `start()` registers before the queue's `isRunning` guard, so a
+        // second call would double up every observer and leak the monitor token.
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !observersInstalled else { return }
+        observersInstalled = true
+
         let center = NSWorkspace.shared.notificationCenter
 
         for name: NSNotification.Name in [
@@ -872,6 +918,10 @@ final class Agent {
             wantsMouseWake = false
             queue.async { self.wakeLoop() }
         }
+        // Two gaps this leaves, both bounded by the heartbeat rather than closed: an event landing
+        // in the moment between the queue deciding to idle and the main thread being told, and
+        // events delivered to this process itself, which a global monitor never sees -- the pointer
+        // sitting on our own status item is the whole of that case.
 
         // The callback is a bare C function pointer, but it takes a context pointer, so it can hand
         // off to the queue instead of writing a shared global -- which was a genuine data race, and

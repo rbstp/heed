@@ -9,7 +9,8 @@
 ![Swift 6](https://img.shields.io/badge/Swift-6-orange?logo=swift)
 
 A small background agent that moves keyboard focus to the window under the pointer, so you stop
-clicking to type. Installs as `Heed.app` — no Dock icon, no window of its own.
+clicking to type. Installs as `Heed.app` — no Dock icon and no window of its own, just a menu bar
+icon that turns it on and off.
 
 Built and verified on macOS 27.0 (Swift 6.4). Requires macOS 14+ on Apple Silicon — releases
 carry no Intel slice, and the cask refuses Intel Macs rather than installing a binary that
@@ -42,6 +43,24 @@ Either way, macOS asks for Accessibility permission on first run — grant it un
 Privacy & Security > Accessibility**. The agent notices within a couple of seconds; there is nothing
 to restart.
 
+## Menu bar
+
+A cube in the menu bar says whether focus is following the pointer. Click it to turn Heed off, click
+again to turn it back on. The icon is dimmed while it is off, and dimmed too while the Accessibility
+grant is missing, since the pointer moves nothing in either case. Hovering it says which: an icon
+that reports itself on and is still dimmed names the missing permission.
+
+Clicking writes the same `enabled` key `defaults write` does, so the choice survives a restart and
+the icon and the configuration cannot come to disagree. Off, the polling timer is cancelled rather
+than left waking 25 times a second to return immediately.
+
+To keep the menu bar as it was, with `defaults write enabled` as the only switch:
+
+```sh
+defaults write io.github.rbstp.heed menuBarIcon -bool false
+make restart
+```
+
 ## Configuration
 
 Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make restart` (or
@@ -49,7 +68,8 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | Master switch. |
+| `enabled` | `true` | Master switch. Clicking the menu bar icon writes this key; off, no polling timer runs at all. |
+| `menuBarIcon` | `true` | Show the cube in the menu bar. See *Menu bar* above. |
 | `dwellMs` | `0` | How long the pointer must rest on a window before focus follows. `0` is instant. Raise it to ~200 if sweeping the pointer across windows churns focus more than you like. |
 | `pollMs` | `40` | Cursor sampling interval. |
 | `raise` | `true` | Also raise the window. See *Focus and raise* below. |

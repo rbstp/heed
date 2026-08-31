@@ -5,6 +5,7 @@ let bundleID = "io.github.rbstp.heed"
 
 struct Config {
     var enabled = true
+    var menuBarIcon = true
     var dwellMs = 0
     var pollMs = 40
     var raise = true
@@ -121,6 +122,7 @@ struct Config {
         }
 
         config.enabled = bool("enabled", config.enabled)
+        config.menuBarIcon = bool("menuBarIcon", config.menuBarIcon)
         config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
         config.pollMs = int("pollMs", config.pollMs, 10...1_000)
         config.raise = bool("raise", config.raise)

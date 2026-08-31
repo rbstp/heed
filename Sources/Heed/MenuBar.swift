@@ -1,4 +1,5 @@
 import AppKit
+import FFMCore
 
 /// The menu bar item: says whether focus is following the pointer, and toggles it when clicked.
 ///
@@ -29,30 +30,17 @@ final class MenuBarController: NSObject {
         NSStatusBar.system.removeStatusItem(item)
     }
 
+    /// What to show is decided by `MenuBarState` in FFMCore, where it is tested; this only applies
+    /// the answer. AppKit's own disabled-control treatment does the dimming, so it matches every
+    /// other menu bar item and follows appearance changes rather than an alpha of our own.
     func render(enabled: Bool, trusted: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let button = item.button else { return }
 
-        // Dimmed whenever the pointer moves nothing, which includes waiting for the Accessibility
-        // grant -- an undimmed icon there would claim the agent was working when it cannot.
-        //
-        // AppKit's own disabled-control treatment rather than an alpha of our own, so it matches
-        // every other menu bar item and follows appearance changes.
-        button.appearsDisabled = !(enabled && trusted)
-
-        // The switch and the grant are separate facts and the icon can only show one of them, so
-        // the tooltip carries both -- but only while it is on. Off, nothing re-checks the grant,
-        // because that only happens on a tick and there are no ticks; naming it here would leave
-        // the tooltip claiming a missing permission for as long as the agent stayed off, long after
-        // it had been granted. Off explains the dimming on its own, and clicking on re-reads the
-        // grant before this runs again.
-        var help = enabled ? "Heed is on. Click to turn it off." : "Heed is off. Click to turn it on."
-        if enabled, !trusted {
-            help += " It also needs Accessibility permission, from"
-                + " System Settings > Privacy & Security > Accessibility."
-        }
-        button.toolTip = help
-        button.setAccessibilityLabel("Heed, \(enabled ? "on" : "off")")
+        let state = MenuBarState(enabled: enabled, trusted: trusted)
+        button.appearsDisabled = state.dimmed
+        button.toolTip = state.tooltip
+        button.setAccessibilityLabel(state.label)
     }
 
     @objc private func clicked() {

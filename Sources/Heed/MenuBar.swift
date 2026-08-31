@@ -9,6 +9,7 @@ import FFMCore
 final class MenuBarController: NSObject {
     private let item: NSStatusItem
     private let onClick: () -> Void
+    private var state = MenuBarState(enabled: true, trusted: true)
 
     init(onClick: @escaping () -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
@@ -21,6 +22,10 @@ final class MenuBarController: NSObject {
         button.imagePosition = .imageOnly
         button.target = self
         button.action = #selector(clicked)
+        // Right-click has to be asked for; a status item button sends its action on left mouse up
+        // only. Control-click arrives as an ordinary left click carrying the modifier, so both are
+        // sorted out in `clicked`.
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
     /// Removed explicitly rather than left to the item's own deallocation, which would give the
@@ -37,14 +42,76 @@ final class MenuBarController: NSObject {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let button = item.button else { return }
 
-        let state = MenuBarState(enabled: enabled, trusted: trusted)
+        state = MenuBarState(enabled: enabled, trusted: trusted)
         button.appearsDisabled = state.dimmed
         button.toolTip = state.tooltip
         button.setAccessibilityLabel(state.label)
     }
 
     @objc private func clicked() {
+        let event = NSApp.currentEvent
+        let secondary = event?.type == .rightMouseUp
+            || event?.modifierFlags.contains(.control) == true
+        if secondary {
+            showMenu()
+        } else {
+            onClick()
+        }
+    }
+
+    /// The menu exists for what a one-button switch cannot say: which version is running, that the
+    /// icon is a switch at all, and where the log is.
+    ///
+    /// Assigned to the item and taken away again rather than left in place, because a status item
+    /// that owns a menu opens it on every click -- which would cost the left-click toggle. Handing
+    /// it over for the length of one click is what gets AppKit's own placement and highlighting
+    /// instead of a popover positioned by hand.
+    private func showMenu() {
+        guard let button = item.button else { return }
+        item.menu = menu()
+        button.performClick(nil)
+        item.menu = nil
+    }
+
+    private func menu() -> NSMenu {
+        let menu = NSMenu()
+
+        // No action, so AppKit's automatic enabling greys it out: a heading, not a command.
+        menu.addItem(NSMenuItem(title: "Heed \(MenuBarController.version)", action: nil,
+                                keyEquivalent: ""))
+        menu.addItem(.separator())
+
+        let toggle = NSMenuItem(title: state.toggleTitle, action: #selector(toggleFromMenu),
+                                keyEquivalent: "")
+        toggle.target = self
+        menu.addItem(toggle)
+
+        let log = NSMenuItem(title: "Open Log", action: #selector(openLog), keyEquivalent: "")
+        log.target = self
+        menu.addItem(log)
+
+        return menu
+    }
+
+    @objc private func toggleFromMenu() {
         onClick()
+    }
+
+    /// The agent's only output. Opens in whatever handles .log, which is Console by default.
+    @objc private func openLog() {
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Logs/heed.log")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            Log.note("no log at \(url.path) yet")
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// The bundle's version, or a marker when there is no bundle -- running straight out of
+    /// `.build`, where claiming a version would be a small lie.
+    private static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "(unpackaged)"
     }
 
     /// The app icon's cube, reduced to what survives at menu bar size: the hexagon silhouette and

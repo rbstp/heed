@@ -54,6 +54,15 @@ Clicking writes the same `enabled` key `defaults write` does, so the choice surv
 the icon and the configuration cannot come to disagree. Off, the polling timer is cancelled rather
 than left waking 25 times a second to return immediately.
 
+Right-click, or control-click, for a short menu: the running version, the same switch as a menu
+item, and *Open Log*. There is deliberately no *Quit* — the login agent restarts whatever exits, so
+a Quit item would be theatre. The switch is the off button; to actually stop the agent, either
+`brew uninstall --cask heed` or:
+
+```sh
+launchctl bootout gui/$(id -u)/io.github.rbstp.heed
+```
+
 To keep the menu bar as it was, with `defaults write enabled` as the only switch:
 
 ```sh

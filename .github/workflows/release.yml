@@ -51,13 +51,22 @@ jobs:
 
       - name: publish the release
         run: |
-          # The release may already exist: publishing one from the GitHub UI pushes the tag, and that
-          # push is what triggers this run. Attach the archive either way, and let a re-run replace it.
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          # This repository has immutable releases on, so a published release can never gain an
+          # asset. Build it as a draft, attach the archive while it can still change, and publish
+          # only once it is complete -- a failed run then leaves a fixable draft rather than a
+          # permanently empty release.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --generate-notes --draft "$ZIP"
+          elif [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
             gh release upload "$TAG" "$ZIP" --clobber
           else
-            gh release create "$TAG" --verify-tag --generate-notes "$ZIP"
+            echo "$TAG is already published, and immutable releases means its assets can no longer"
+            echo "change. Release by pushing a bare tag and letting this workflow create the release:"
+            echo "  git tag $TAG && git push origin $TAG"
+            echo "Do not create the release in the GitHub UI first."
+            exit 1
           fi
+          gh release edit "$TAG" --draft=false
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}

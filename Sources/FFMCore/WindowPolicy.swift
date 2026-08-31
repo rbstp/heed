@@ -117,6 +117,27 @@ private let transientSubroles: Set<String> = [
     kAXDialogSubrole, kAXSystemDialogSubrole,
 ]
 
+// MARK: - Windows that hold focus
+
+/// Whether a window that currently holds its app's keyboard focus should keep it against a
+/// pointer-driven switch to a *sibling* window of the same app.
+///
+/// The mirror image of the transient-window rejection above. Heed already refuses to *give* focus
+/// to a dialog or floating panel; this refuses to *take* key status away from one. The everyday
+/// case is the About box: picked from a menu, it opens away from the pointer, so the main window
+/// still sitting under the pointer immediately takes key status back -- and since a dialog can
+/// never be acquired by pointer, hovering the panel cannot restore it. The panel is buried before
+/// it can be read. (CodeBurn's About panel, which motivated this, reports subrole AXDialog and an
+/// empty title -- a title-based exception would have had nothing to match.)
+///
+/// Scoped to the same app on purpose: moving the pointer to a *different* app is a clear change of
+/// intent and still switches. Within the app, clicking a sibling window still works too -- that is
+/// macOS, not Heed.
+public func transientWindowHoldsFocus(subrole: String?) -> Bool {
+    guard let subrole else { return false }
+    return transientSubroles.contains(subrole)
+}
+
 public func evaluate(_ candidate: WindowCandidate, policy: WindowPolicy) -> WindowVerdict {
     guard candidate.role == kAXWindowRole else {
         return .reject("role \(candidate.role ?? "nil")")

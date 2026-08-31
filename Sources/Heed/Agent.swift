@@ -37,6 +37,7 @@ final class Agent {
     private var overlayCacheUntil: Double = 0
     private var hitTestFailures = 0
     private var hitTestCooldownUntil: Double = 0
+    private var accessibilityLost = false
 
 
     /// Last target named in the log, so verbose mode reports each window once on entry rather than
@@ -295,6 +296,13 @@ final class Agent {
             systemWide, Float(point.x), Float(point.y), &hit
         )
 
+        // One line per transition, not per call: hit tests run on every tick the pointer moves,
+        // and an unrotated log must not pay by the hour for a permission revoked mid-run.
+        if accessibilityLost, error != .apiDisabled {
+            accessibilityLost = false
+            Log.note("Accessibility access returned")
+        }
+
         // Only some of these mean "there is no Accessibility here"; the rest are infrastructure
         // problems, and treating them all as the former sent healthy apps down the app-level path.
         switch error {
@@ -314,7 +322,10 @@ final class Agent {
         case .noValue:
             return nil   // nothing under the pointer, e.g. the desktop
         case .apiDisabled:
-            Log.note("Accessibility access is no longer granted; waiting for it to return")
+            if !accessibilityLost {
+                accessibilityLost = true
+                Log.note("Accessibility access is no longer granted; waiting for it to return")
+            }
             return nil
         default:
             Log.debug("hit test failed: AXError \(error.rawValue)")
@@ -523,6 +534,16 @@ final class Agent {
         }
         if CFEqual(focusedWindow, window) { return true }
 
+        // A dialog or floating panel that holds the app's key focus keeps it; see
+        // transientWindowHoldsFocus in FFMCore. Reported as "already focused" so the machine
+        // treats the tick as settled instead of retrying into a fight it must not win.
+        let focusedSubrole = axString(focusedWindow, kAXSubroleAttribute)
+        if transientWindowHoldsFocus(subrole: focusedSubrole) {
+            Log.debug("\(target.describedAs): a \(focusedSubrole ?? "?") window holds the app's "
+                + "key focus; leaving it")
+            return true
+        }
+
         // Electron hands back a different instance for the same window depending on how it was
         // obtained, so fall back to what was captured at hit-test time -- frame *and* title, for the
         // reason on Target's equality. Anything unreadable counts as "not a match": the cost is a
@@ -553,7 +574,9 @@ final class Agent {
 
     private func appElement(for pid: pid_t) -> AXUIElement {
         let launched = NSRunningApplication(processIdentifier: pid)?.launchDate
-        if let cached = appElements[pid], cached.launched == launched {
+        // A nil launch date never matches: two unrelated processes can both fail to report one,
+        // and creating the element again is local work, not a cross-process call.
+        if let cached = appElements[pid], let launched, cached.launched == launched {
             return cached.element
         }
         // Either nothing cached, or the pid was recycled by a different process.

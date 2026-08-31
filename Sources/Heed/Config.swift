@@ -65,11 +65,13 @@ struct Config {
     /// fixed-size windows lack it too (Calculator, for one). So a targeted title rule it is.
     ///
     /// Anchored on the exact titles Outlook uses ("1 Reminder", "3 Reminders"), so an email whose
-    /// subject merely contains the word is unaffected.
+    /// subject merely contains the word is unaffected. The title follows the app's locale, so the
+    /// rule covers the locales seen so far -- English and French ("1 rappel") -- and any other
+    /// locale needs an `excludedWindowTitles` entry until it is added here.
     static let builtinTitleExclusions: [(bundleID: String?, pattern: String)] = [
-        ("com.microsoft.Outlook", "^[0-9]+ Reminders?$"),
+        ("com.microsoft.Outlook", "^[0-9]+ (Reminders?|rappels?)$"),
     ]
-    /// The `dev.rboisvert.focus-macos` defaults domain, however this process was started.
+    /// The `io.github.rbstp.heed` defaults domain, however this process was started.
     ///
     /// Installed in the app bundle, the main bundle identifier already *is* that domain, so
     /// `.standard` reads it. A suite name must not be used there: Foundation rejects using your own

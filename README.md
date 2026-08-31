@@ -5,13 +5,15 @@
 [![CI](https://github.com/rbstp/heed/actions/workflows/ci.yml/badge.svg)](https://github.com/rbstp/heed/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rbstp/heed?logo=github)](https://github.com/rbstp/heed/releases/latest)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
-![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)
+![macOS 14+ on Apple Silicon](https://img.shields.io/badge/macOS-14%2B%20Apple%20Silicon-black?logo=apple)
 ![Swift 6](https://img.shields.io/badge/Swift-6-orange?logo=swift)
 
 A small background agent that moves keyboard focus to the window under the pointer, so you stop
 clicking to type. Installs as `Heed.app` — no Dock icon, no window of its own.
 
-Built and verified on macOS 27.0 (arm64, Swift 6.4). Requires macOS 14+.
+Built and verified on macOS 27.0 (Swift 6.4). Requires macOS 14+ on Apple Silicon — releases
+carry no Intel slice, and the cask refuses Intel Macs rather than installing a binary that
+cannot run.
 
 ## Install
 
@@ -78,8 +80,8 @@ Spotlight, Raycast and AltTab. The last two draw floating panels the pointer wou
 ## When it doesn't do what you expect
 
 ```sh
-make probe          # what the agent sees under the pointer right now
-make probe X Y      # ...or at a screen point you would rather not hover
+make probe              # what the agent sees under the pointer right now
+make probe X=960 Y=540  # ...or at a screen point you would rather not hover
 ```
 
 It reports every guard, the raw Accessibility element, how the window was resolved and the final
@@ -176,10 +178,12 @@ small built-in list of title rules:
 
 | App | Title pattern |
 | --- | --- |
-| Microsoft Outlook | `^[0-9]+ Reminders?$` |
+| Microsoft Outlook | `^[0-9]+ (Reminders?|rappels?)$` |
 
-The pattern is anchored on the exact titles Outlook uses (`1 Reminder`, `3 Reminders`) so an email
-whose subject merely mentions a reminder stays focusable. `Tests/FFMCoreTests/TitleRuleTests.swift`
+The pattern is anchored on the exact titles Outlook uses (`1 Reminder`, `3 Reminders` — and
+`1 rappel` in French, since the title follows the app's locale) so an email whose subject merely
+mentions a reminder stays focusable. Other locales need an `excludedWindowTitles` entry until
+their titles are added to the built-in rule. `Tests/FFMCoreTests/TitleRuleTests.swift`
 covers that, because the hazard with title rules is not failing to match — it is matching too much.
 To add your own:
 
@@ -187,6 +191,14 @@ To add your own:
 defaults write io.github.rbstp.heed excludedWindowTitles -array '^Picture in Picture$'
 make restart
 ```
+
+The rule also works in the opposite direction: a dialog or floating panel that *holds* the
+app's keyboard focus keeps it. The everyday case is the About box — picked from a menu, it opens
+away from the pointer, so the main window still sitting under the pointer would immediately take
+key status back, and since a dialog can never be acquired by pointer, hovering it could not
+restore it. The panel was buried before it could be read. So within the app that owns the dialog,
+the pointer does not move key focus at all; moving to a different app still switches, and clicking
+a sibling window still works — that is macOS, not Heed.
 
 ## Windows that arrive under the pointer
 
@@ -272,7 +284,7 @@ because compiling proves very little here: a broken plist, a missing icon or a s
 not verify all build perfectly well.
 
 Merging a pull request into `master` releases. `.github/workflows/release.yml` works out the next
-version from the latest tag — a PR whose title mentions `feat` takes the minor, anything else the
+version from the latest tag — a PR whose title starts with `feat` takes the minor, anything else the
 patch — then builds the archive, publishes it as a GitHub release, and commits the new version and
 checksum into `Casks/heed.rb` in [rbstp/homebrew-tap](https://github.com/rbstp/homebrew-tap) using
 the `TAP_TOKEN` secret. Those two lines are generated — editing them by hand only invites the cask

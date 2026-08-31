@@ -1,8 +1,15 @@
 import Foundation
+import os
 
-/// stderr logging; the LaunchAgent redirects it to ~/Library/Logs/focus-macos.log.
+/// stderr logging; the LaunchAgent redirects it to ~/Library/Logs/heed.log.
 enum Log {
-    nonisolated(unsafe) static var verbose = false
+    /// Written by config reloads on the agent's queue and read from any thread that logs, so it
+    /// sits behind a lock rather than `nonisolated(unsafe)` hope.
+    private static let verboseState = OSAllocatedUnfairLock(initialState: false)
+    static var verbose: Bool {
+        get { verboseState.withLock { $0 } }
+        set { verboseState.withLock { $0 = newValue } }
+    }
 
     private static let formatter: DateFormatter = {
         let formatter = DateFormatter()

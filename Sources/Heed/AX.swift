@@ -77,9 +77,11 @@ struct Target {
     let pid: pid_t
     let window: AXUIElement?
     let bundleID: String?
-    /// Captured at hit-test time. Used to compare windows without further cross-process calls --
-    /// see the equality below for why identity alone is not enough.
+    /// Captured at hit-test time, so windows can be compared without further cross-process calls.
+    /// `.null` when the window would not report a position -- see the equality below.
     let frame: CGRect
+    /// Also captured up front, and part of identity: see the equality below.
+    let title: String?
     /// For logs only.
     let describedAs: String
 }
@@ -99,7 +101,14 @@ extension Target: Equatable {
             // makes the pointer look like it is constantly entering somewhere new. The frame is
             // captured up front, so this costs no extra cross-process calls.
             if CFEqual(lhsWindow, rhsWindow) { return true }
-            return !lhs.frame.isEmpty && lhs.frame == rhs.frame
+
+            // Geometry alone is not identity: two windows of one app can share a frame exactly --
+            // two maximised windows being the obvious case -- and treating those as the same window
+            // means focusing one silently satisfies a request for the other. So the title has to
+            // agree as well, and a window that would not report a position (frame `.null`) gets no
+            // fallback at all rather than a fabricated origin.
+            guard !lhs.frame.isNull, !lhs.frame.isEmpty, lhs.frame == rhs.frame else { return false }
+            return lhs.title == rhs.title
         default:
             return false
         }

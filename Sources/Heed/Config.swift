@@ -9,6 +9,7 @@ struct Config {
     var pollMs = 40
     var raise = true
     var typingCooldownMs = 500
+    var clickGraceMs = 150
     var verifyTimeoutMs = 100
     var entryMotionPx = 6
     var ignoreWhenCommandHeld = true
@@ -23,6 +24,7 @@ struct Config {
     var dwell: Double { Double(dwellMs) / 1000 }
     var poll: Double { Double(pollMs) / 1000 }
     var typingCooldown: Double { Double(typingCooldownMs) / 1000 }
+    var clickGrace: Double { Double(clickGraceMs) / 1000 }
     var verifyTimeout: Double { Double(verifyTimeoutMs) / 1000 }
 
     /// Apps that must never receive focus from the pointer.
@@ -78,20 +80,30 @@ struct Config {
 
         let defaults = store()
 
-        func int(_ key: String, _ current: Int) -> Int {
-            defaults.object(forKey: key) == nil ? current : defaults.integer(forKey: key)
+        /// Clamped to a sane range and logged when clamped: these values are typed by hand into
+        /// `defaults write`, and a stray zero used to be able to park the agent for hours.
+        func int(_ key: String, _ current: Int, _ limits: ClosedRange<Int>) -> Int {
+            guard defaults.object(forKey: key) != nil else { return current }
+            let given = defaults.integer(forKey: key)
+            let clamped = min(max(given, limits.lowerBound), limits.upperBound)
+            if clamped != given {
+                Log.note("\(key)=\(given) is outside \(limits.lowerBound)...\(limits.upperBound); "
+                    + "using \(clamped)")
+            }
+            return clamped
         }
         func bool(_ key: String, _ current: Bool) -> Bool {
             defaults.object(forKey: key) == nil ? current : defaults.bool(forKey: key)
         }
 
         config.enabled = bool("enabled", config.enabled)
-        config.dwellMs = max(0, int("dwellMs", config.dwellMs))
-        config.pollMs = max(10, int("pollMs", config.pollMs))
+        config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
+        config.pollMs = int("pollMs", config.pollMs, 10...1_000)
         config.raise = bool("raise", config.raise)
-        config.typingCooldownMs = max(0, int("typingCooldownMs", config.typingCooldownMs))
-        config.verifyTimeoutMs = max(50, int("verifyTimeoutMs", config.verifyTimeoutMs))
-        config.entryMotionPx = max(0, int("entryMotionPx", config.entryMotionPx))
+        config.typingCooldownMs = int("typingCooldownMs", config.typingCooldownMs, 0...5_000)
+        config.clickGraceMs = int("clickGraceMs", config.clickGraceMs, 0...2_000)
+        config.verifyTimeoutMs = int("verifyTimeoutMs", config.verifyTimeoutMs, 20...2_000)
+        config.entryMotionPx = int("entryMotionPx", config.entryMotionPx, 0...200)
         config.ignoreWhenCommandHeld = bool("ignoreWhenCommandHeld", config.ignoreWhenCommandHeld)
         config.menuGuard = bool("menuGuard", config.menuGuard)
         config.requireStandardWindow = bool("requireStandardWindow", config.requireStandardWindow)

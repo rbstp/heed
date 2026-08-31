@@ -58,7 +58,12 @@ public struct DwellMachine<Target: Equatable> {
     ) -> Target? {
         switch condition {
         case .suppressing:
+            // Arm a fresh hit test as well as dropping the candidate. Without it, entering a window
+            // while suppressed (mid-typing, button held, menu open) and then stopping left the
+            // pointer parked over a window that could never be acquired: no movement means no hit
+            // test, and the candidate is already gone.
             candidate = nil
+            forceHitTest = true
             return nil
         case .invalidating:
             candidate = nil

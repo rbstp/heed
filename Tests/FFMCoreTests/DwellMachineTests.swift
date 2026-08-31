@@ -169,6 +169,24 @@ final class DwellMachineTests: XCTestCase {
         XCTAssertEqual(h.hitTestCalls, 0)
     }
 
+    /// Suppression must not disarm the machine permanently. Typing while the pointer already rests
+    /// over a window, then stopping, has to leave that window acquirable -- the pointer will not move
+    /// again to trigger a fresh hit test.
+    func testTargetIsReacquiredAfterSuppressionEnds() {
+        let h = Harness(dwell: 0.2)
+        h.underCursor = "A"
+        h.tick(moved: true)
+        h.tick(.suppressing)
+
+        let before = h.hitTestCalls
+        h.tick(moved: false)
+        XCTAssertEqual(h.hitTestCalls, before + 1, "suppression ending must re-test, unprompted")
+
+        h.advance(0.25)
+        XCTAssertEqual(h.tick(moved: false), "A",
+                       "a window under a still pointer must be focusable once suppression lifts")
+    }
+
     /// After a Space change or display reconfiguration, what sits under an unmoved pointer is
     /// different, so the next tick has to re-test rather than trust the previous result.
     func testInvalidatingForcesHitTestWithoutMovement() {

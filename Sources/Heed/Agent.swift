@@ -38,6 +38,7 @@ final class Agent {
     private var blockedUntil: [pid_t: Double] = [:]
     private var failureCounts: [pid_t: Int] = [:]
 
+    private var isRunning = false
     private var hitTestFailures = 0
     private var hitTestCooldownUntil: Double = 0
 
@@ -67,8 +68,8 @@ final class Agent {
         // it is deliberately short and why the number of messages per tick is kept small.
         AXUIElementSetMessagingTimeout(systemWide, 0.1)
 
+        isRunning = true
         observeSystemEvents()
-        installSignalHandlers()
         scheduleTimer()
 
         Log.note("running: dwell=\(config.dwellMs)ms poll=\(config.pollMs)ms raise=\(config.raise) "
@@ -91,7 +92,7 @@ final class Agent {
             Log.verbose = config.verbose
             machine.dwell = config.dwell
             machine.invalidate()
-            scheduleTimer()   // pollMs may have changed
+            if isRunning { scheduleTimer() }   // pollMs may have changed
             Log.note("reloaded config: dwell=\(config.dwellMs)ms poll=\(config.pollMs)ms "
                 + "raise=\(config.raise) enabled=\(config.enabled)")
         }
@@ -555,7 +556,12 @@ final class Agent {
         CGDisplayRegisterReconfigurationCallback({ _, _, _ in displayDidReconfigure = true }, nil)
     }
 
-    private func installSignalHandlers() {
+    /// Installed before the Accessibility gate, not from `start()`.
+    ///
+    /// Left inside `start()` it was never installed while the agent sat waiting for permission,
+    /// so SIGHUP kept its default disposition and killed the process instead of reloading. KeepAlive
+    /// hid that by respawning it.
+    func installSignalHandlers() {
         // A dispatch source, not a POSIX handler: almost nothing is safe to call from inside a
         // signal handler, and reloading config is not on that list.
         signal(SIGHUP, SIG_IGN)

@@ -20,6 +20,9 @@ if let flag = CommandLine.arguments.firstIndex(of: "--probe") {
 }
 
 Log.note("Heed starting (\(bundleID))")
+
+// Before the permission gate: a reload request must work whether or not the agent got that far.
+agent.installSignalHandlers()
 var permissionWaiter: DispatchSourceTimer?
 
 if accessibilityTrusted(prompt: true) {

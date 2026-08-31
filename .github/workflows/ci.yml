@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: report toolchain
+        run: swift --version
+
+      - name: build
+        run: swift build --build-tests
+
+      - name: test
+        run: swift test --skip-build
+
+      - name: check release compiles
+        run: swift build -c release
+
+      - name: check packaging
+        run: make check-package

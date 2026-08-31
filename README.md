@@ -54,12 +54,13 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 | `pollMs` | `40` | Cursor sampling interval. |
 | `raise` | `true` | Also raise the window. See *Focus and raise* below. |
 | `typingCooldownMs` | `500` | Ignore the pointer for this long after a keystroke. |
-| `clickGraceMs` | `150` | Ignore the pointer for this long after a mouse press. Short: unlike typing, this exists only to cover clicks that begin and end between two polls, which an instantaneous button check cannot see. |
+| `clickGraceMs` | `150` | Ignore the pointer for this long after a mouse press or release. Releases count so the grace survives a long drag — it starts at the drop, not at the grab. Short: unlike typing, this exists only to cover clicks that begin and end between two polls, which an instantaneous button check cannot see. |
 | `entryMotionPx` | `6` | Pointer travel (in points, over roughly the last 200 ms) required before a *different* window may take focus. Stops windows that appear under a still pointer from taking it. `0` disables. |
 | `verifyTimeoutMs` | `100` | How long to wait for focus to land before giving up on this attempt. Spent with the agent blocked, so it is deliberately tight — the mechanism that works confirms in roughly 25 ms, and a failure just retries on the next tick. |
 | `ignoreWhenCommandHeld` | `true` | Ignore the pointer while ⌘ is down, so Cmd-Tab is not fought. |
 | `menuGuard` | `true` | Ignore the pointer while a menu, popover or drag image is on screen. |
 | `requireStandardWindow` | `true` | Only focus ordinary windows (`AXStandardWindow`). Keeps transient pop-ups from dragging their app forward — see *Transient windows* below. |
+| `promptGuard` | `true` | While a prompt awaits an answer in the frontmost app — Finder asking whether to replace the file you just dropped — the pointer moves no focus at all, so the prompt cannot be buried mid-question. Lifts the moment the question is answered. |
 | `excludedWindowTitles` | `[]` | Case-insensitive **regular expressions**; a window whose title matches any of them is never focused. Applies to every app, and adds to the built-in rules below. |
 | `excludedBundleIDs` | `[]` | Extra apps to never focus. **Added to** the built-in list, not replacing it. |
 | `verbose` | `false` | Log every decision. |
@@ -199,6 +200,18 @@ key status back, and since a dialog can never be acquired by pointer, hovering i
 restore it. The panel was buried before it could be read. So within the app that owns the dialog,
 the pointer does not move key focus at all; moving to a different app still switches, and clicking
 a sibling window still works — that is macOS, not Heed.
+
+Some prompts cannot be classified even by subrole. Finder's copy prompt — the one asking whether
+to replace the file you just dropped — reports `AXStandardWindow`, while on this OS Finder's
+ordinary browser windows report `AXDialog`: exactly backwards. It is recognised instead by the
+accessibility identifier its developer gave it (`Progress`), which unlike its localized title
+survives a language change, together with the row of answer buttons that only its question form
+shows — the same window doubles as the plain copy-progress bar, which must not hold anything.
+While such a prompt awaits an answer in the *frontmost* app, the pointer moves no focus anywhere,
+not even to another app: stealing focus would raise some other window over the prompt, and a
+buried prompt can never be reached by pointer again, because the hit test resolves whatever covers
+it. The moment the question is answered everything resumes, including the window under the resting
+pointer taking focus. `promptGuard` turns this off.
 
 ## Windows that arrive under the pointer
 

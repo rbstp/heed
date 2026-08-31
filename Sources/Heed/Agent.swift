@@ -35,6 +35,8 @@ final class Agent {
     private var isRunning = false
     private var overlayCached = false
     private var overlayCacheUntil: Double = 0
+    private var promptCached = false
+    private var promptCacheUntil: Double = 0
     private var hitTestFailures = 0
     private var hitTestCooldownUntil: Double = 0
     private var accessibilityLost = false
@@ -152,6 +154,19 @@ final class Agent {
             return
         }
 
+        // The pointer must not bury a question. While a prompt awaits an answer in the frontmost
+        // app -- Finder asking whether to replace the file just dropped -- focus moves nowhere:
+        // stealing it would raise another window over the prompt, and a buried prompt can never be
+        // reached by pointer again, because the hit test resolves whatever covers it. Going through
+        // invalidate() keeps retrying, so the window under the resting pointer still takes focus
+        // the moment the question is answered.
+        if config.promptGuard, frontmostPromptAwaitsAnswer() {
+            Log.debug("not focusing \(confirmed.describedAs): a prompt awaits an answer "
+                + "in the frontmost app")
+            machine.invalidate()
+            return
+        }
+
         if !applyFocus(to: confirmed) {
             // Re-arm so a stationary pointer still gets another attempt; going through invalidate()
             // means the next attempt re-derives the target rather than reusing this reference.
@@ -176,7 +191,7 @@ final class Agent {
         // A click can begin and end entirely between two polls, and a click is a deliberate focus
         // choice that the pointer should not immediately override. Short, because unlike typing this
         // is only closing a sampling gap.
-        if config.clickGraceMs > 0, secondsSinceAny(of: mouseDownEvents) < config.clickGrace {
+        if config.clickGraceMs > 0, secondsSinceAny(of: deliberateMouseEvents) < config.clickGrace {
             return .suppressing
         }
 
@@ -205,7 +220,12 @@ final class Agent {
         return .normal
     }
 
-    private let mouseDownEvents: [CGEventType] = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+    /// Releases as well as presses: the grace after a drag has to start at the drop, not at the
+    /// grab, or a long drag exhausts it before the release even happens.
+    private let deliberateMouseEvents: [CGEventType] = [
+        .leftMouseDown, .rightMouseDown, .otherMouseDown,
+        .leftMouseUp, .rightMouseUp, .otherMouseUp,
+    ]
 
     private func secondsSinceAny(of types: [CGEventType]) -> Double {
         types.reduce(Double.greatestFiniteMagnitude) { earliest, type in
@@ -543,6 +563,11 @@ final class Agent {
                 + "key focus; leaving it")
             return true
         }
+        // The target's app is the frontmost app here, so the cached check answers for it too.
+        if config.promptGuard, frontmostPromptAwaitsAnswer() {
+            Log.debug("\(target.describedAs): a prompt awaits an answer; leaving key focus alone")
+            return true
+        }
 
         // Electron hands back a different instance for the same window depending on how it was
         // obtained, so fall back to what was captured at hit-test time -- frame *and* title, for the
@@ -570,6 +595,40 @@ final class Agent {
 
     private func runningApp(pid: pid_t) -> NSRunningApplication? {
         NSRunningApplication(processIdentifier: pid)
+    }
+
+    /// Whether the frontmost app's key window is a prompt in mid-question; see windowAwaitsAnswer.
+    ///
+    /// Cached briefly: at instant dwell this is consulted on every tick of a focus fight, and the
+    /// answer takes several cross-process reads. Cheap for every other tick of heed's life -- no
+    /// Accessibility call happens until the frontmost app actually has a prompt rule, which only
+    /// Finder does.
+    private func frontmostPromptAwaitsAnswer() -> Bool {
+        if now < promptCacheUntil { return promptCached }
+        promptCacheUntil = now + 0.25
+        promptCached = false
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != ownPid,
+           let bundle = front.bundleIdentifier,
+           config.promptRules.contains(where: { $0.bundleID == bundle }),
+           let key = axElement(appElement(for: front.processIdentifier), kAXFocusedWindowAttribute) {
+            promptCached = windowAwaitsAnswer(
+                identifier: axString(key, kAXIdentifierAttribute),
+                bundleID: bundle,
+                buttonCount: windowLevelButtonCount(key),
+                promptRules: config.promptRules
+            )
+        }
+        return promptCached
+    }
+
+    /// Buttons that are direct children of the window; the buttons inside a prompt's content
+    /// (a scroll area's per-item controls, say) deliberately do not count.
+    private func windowLevelButtonCount(_ window: AXUIElement) -> Int {
+        guard let children = axCopy(window, kAXChildrenAttribute) as? [AXUIElement] else { return 0 }
+        return children.reduce(0) {
+            $0 + (axString($1, kAXRoleAttribute) == kAXButtonRole ? 1 : 0)
+        }
     }
 
     private func appElement(for pid: pid_t) -> AXUIElement {
@@ -670,6 +729,8 @@ final class Agent {
         let command = CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand)
         print("  command held:       \(command && config.ignoreWhenCommandHeld ? "yes  <- SUPPRESSING" : "no")")
         print("  overlay on screen:  \(config.menuGuard && overlayPresent() ? "yes  <- SUPPRESSING" : "no")")
+        let promptHolds = config.promptGuard && frontmostPromptAwaitsAnswer()
+        print("  prompt mid-question:\(promptHolds ? " yes  <- HOLDING ALL FOCUS" : " no")")
 
         print("\naccessibility at cursor")
         var hit: AXUIElement?
@@ -714,6 +775,7 @@ final class Agent {
                     print("  size:               \(Int(size.width))x\(Int(size.height))")
                 }
                 print("  title:              \(axString(window, kAXTitleAttribute) ?? "-")")
+                print("  identifier:         \(axString(window, kAXIdentifierAttribute) ?? "-")")
                 print("  AXMain settable:    \(axIsSettable(window, kAXMainAttribute))")
                 print("  AXFocused settable: \(axIsSettable(window, kAXFocusedAttribute))")
             }

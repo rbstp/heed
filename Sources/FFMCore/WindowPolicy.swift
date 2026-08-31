@@ -119,7 +119,22 @@ private let transientSubroles: Set<String> = [
 
 // MARK: - Windows that hold focus
 
-/// Whether a window that currently holds its app's keyboard focus should keep it against a
+/// A window that must keep its app's keyboard focus, matched on the accessibility identifier its
+/// developer gave it. For prompts the subrole checks cannot classify: Finder's file-operation
+/// window -- the one asking whether to replace the file you just dropped -- reports subrole
+/// AXStandardWindow while (on macOS 27) Finder's ordinary browser windows report AXDialog, exactly
+/// backwards. Its identifier ("Progress"), unlike its title ("Copy"), survives localization.
+public struct PromptRule: Equatable, Sendable {
+    public let bundleID: String
+    public let identifier: String
+
+    public init(bundleID: String, identifier: String) {
+        self.bundleID = bundleID
+        self.identifier = identifier
+    }
+}
+
+/// Whether the window that currently holds its app's keyboard focus should keep it against a
 /// pointer-driven switch to a *sibling* window of the same app.
 ///
 /// The mirror image of the transient-window rejection above. Heed already refuses to *give* focus
@@ -131,11 +146,28 @@ private let transientSubroles: Set<String> = [
 /// empty title -- a title-based exception would have had nothing to match.)
 ///
 /// Scoped to the same app on purpose: moving the pointer to a *different* app is a clear change of
-/// intent and still switches. Within the app, clicking a sibling window still works too -- that is
+/// intent and still switches. Within the app, clicking a sibling window still works too; that is
 /// macOS, not Heed.
 public func transientWindowHoldsFocus(subrole: String?) -> Bool {
     guard let subrole else { return false }
     return transientSubroles.contains(subrole)
+}
+
+/// Whether the window holding an app's keyboard focus is a prompt in the middle of asking its
+/// question, which the agent answers for by moving no focus anywhere: stealing focus raises
+/// another window over the prompt, and a buried prompt can never be reached by pointer again,
+/// because the hit test resolves whatever covers it.
+///
+/// Two conditions, both required. The identifier rule names the window; the button count tells the
+/// question form from the idle one. Finder's Progress window is both the file-copy progress bar
+/// and the replace/skip/stop question -- same identifier, same subrole -- and only the question
+/// form shows a row of answer buttons as direct children of the window. Requiring two or more
+/// keeps a lone Stop button from freezing pointer focus for the length of a big copy.
+public func windowAwaitsAnswer(
+    identifier: String?, bundleID: String?, buttonCount: Int, promptRules: [PromptRule]
+) -> Bool {
+    guard buttonCount >= 2, let identifier, let bundleID else { return false }
+    return promptRules.contains { $0.bundleID == bundleID && $0.identifier == identifier }
 }
 
 public func evaluate(_ candidate: WindowCandidate, policy: WindowPolicy) -> WindowVerdict {

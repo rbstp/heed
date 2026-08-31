@@ -15,6 +15,9 @@ struct Config {
     var ignoreWhenCommandHeld = true
     var menuGuard = true
     var requireStandardWindow = true
+    var promptGuard = true
+    /// Prompts that hold focus; see PromptRule in FFMCore, where the matching is tested.
+    var promptRules: [PromptRule] = []
     var excludedWindowTitles: [String] = []
     /// Compiled title rules. See `TitleRule` in FFMCore, where the matching is tested.
     var titleExclusions: [TitleRule] = []
@@ -78,6 +81,15 @@ struct Config {
     /// bundle identifier as a suite ("does not make sense and will not work") and silently reads
     /// nothing. Run as a bare binary instead -- `make probe`, or straight out of `.build` -- there is
     /// no main bundle identifier to go on, and the suite is what finds the same domain.
+    /// Windows that pass every structural check yet are prompts awaiting an answer, keyed on the
+    /// accessibility identifier their developer set. Finder's file-operation window is the
+    /// motivating case: its replace/skip/stop question reports subrole AXStandardWindow, so
+    /// nothing structural marks it, and its title ("Copy") changes with the locale while the
+    /// identifier does not.
+    static let builtinPromptRules: [PromptRule] = [
+        PromptRule(bundleID: "com.apple.finder", identifier: "Progress"),
+    ]
+
     static func store() -> UserDefaults {
         if Bundle.main.bundleIdentifier == bundleID {
             return .standard
@@ -88,6 +100,7 @@ struct Config {
     static func load() -> Config {
         var config = Config()
         config.excludedBundleIDs = builtinExclusions
+        config.promptRules = builtinPromptRules
 
         let defaults = store()
 
@@ -118,6 +131,7 @@ struct Config {
         config.ignoreWhenCommandHeld = bool("ignoreWhenCommandHeld", config.ignoreWhenCommandHeld)
         config.menuGuard = bool("menuGuard", config.menuGuard)
         config.requireStandardWindow = bool("requireStandardWindow", config.requireStandardWindow)
+        config.promptGuard = bool("promptGuard", config.promptGuard)
         if let titles = defaults.stringArray(forKey: "excludedWindowTitles") {
             config.excludedWindowTitles = titles
         }

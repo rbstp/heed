@@ -68,6 +68,63 @@ final class FocusHolderTests: XCTestCase {
     }
 }
 
+final class PromptTests: XCTestCase {
+    private let finderPrompt = [PromptRule(bundleID: "com.apple.finder", identifier: "Progress")]
+
+    /// The motivating case: Finder asking whether to replace a dropped file. Subrole
+    /// AXStandardWindow, localized title, but a stable identifier and a row of answer buttons.
+    func testFindersReplaceQuestionAwaitsAnswer() {
+        XCTAssertTrue(windowAwaitsAnswer(
+            identifier: "Progress", bundleID: "com.apple.finder",
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+    }
+
+    /// The same window in its idle form -- a copy in progress -- has no window-level buttons, and
+    /// a lone Stop button is not a question. Holding there would freeze pointer focus for the
+    /// length of a big copy.
+    func testPlainProgressDoesNotHoldFocus() {
+        for buttons in [0, 1] {
+            XCTAssertFalse(windowAwaitsAnswer(
+                identifier: "Progress", bundleID: "com.apple.finder",
+                buttonCount: buttons, promptRules: finderPrompt
+            ), "\(buttons) window-level button(s) is not a question")
+        }
+    }
+
+    func testOrdinaryFinderWindowsDoNotMatch() {
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: "FinderWindow", bundleID: "com.apple.finder",
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+    }
+
+    func testARuleIsScopedToItsApp() {
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: "Progress", bundleID: "com.example.App",
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+    }
+
+    func testMissingIdentifierNeverMatches() {
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: nil, bundleID: "com.apple.finder",
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: "Progress", bundleID: nil,
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+    }
+
+    func testNoRulesMatchNothing() {
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: "Progress", bundleID: "com.apple.finder",
+            buttonCount: 3, promptRules: []
+        ))
+    }
+}
+
 final class WindowPolicyTests: XCTestCase {
     private let outlook = "com.microsoft.Outlook"
 

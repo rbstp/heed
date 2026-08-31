@@ -248,6 +248,20 @@ already focused. Live system state is the only authority.
 - Stage Manager manages its own window layering and may fight this.
 - Without `make cert`, rebuilding invalidates the Accessibility grant (see *Signing* above).
 
+## Icon
+
+A Borg cube, rendered in code by `Tools/make-icon.swift` and assembled with `make icon`, so the
+artwork is reviewable as source rather than committed as a binary. Below 32px the mark switches to
+the cube seen head-on: an isometric cube has about nine pixels to work with there and collapses into
+a green ring. Everything from 32px up uses the isometric version.
+
+If the icon shows blank after an install, that is an icon cache rather than the bundle — check what
+the system actually resolves before chasing it:
+
+```sh
+killall iconservicesagent      # then reopen the window showing it
+```
+
 ## Prior art
 
 [`sbmpost/AutoRaise`](https://github.com/sbmpost/AutoRaise) solves the same problem in C++ and

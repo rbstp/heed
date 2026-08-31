@@ -10,6 +10,8 @@
 	<string>Heed</string>
 	<key>CFBundleExecutable</key>
 	<string>@APP_NAME@</string>
+	<key>CFBundleIconFile</key>
+	<string>@APP_NAME@</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

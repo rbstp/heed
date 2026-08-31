@@ -19,9 +19,11 @@ LOG         := $(HOME)/Library/Logs/heed.log
 DOMAIN      := gui/$(shell id -u)
 SIGN_ID     := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q '$(CERT_NAME)' && printf '%s' '$(CERT_NAME)' || printf -- '-')
 BUILT       := .build/release/$(APP_NAME)
+ICON_SRC    := Tools/make-icon.swift
+ICNS        := .build/$(APP_NAME).icns
 
 .PHONY: all build test bundle install install-agent uninstall restart logs probe \
-        cert reset-permission requirement clean
+        icon cert reset-permission requirement clean
 
 all: build
 
@@ -31,11 +33,29 @@ build:
 test:
 	swift test
 
+## Render the app icon at every size the iconset needs.
+##
+## Generated rather than committed, so the artwork stays reviewable as code. The renderer switches to
+## a head-on cube below 32px, where an isometric one collapses into a green ring.
+icon: $(ICNS)
+
+$(ICNS): $(ICON_SRC)
+	@rm -rf .build/$(APP_NAME).iconset
+	@mkdir -p .build/$(APP_NAME).iconset
+	@set -e; for spec in 16:16x16 32:16x16@2x 32:32x32 64:32x32@2x 128:128x128 \
+	                     256:128x128@2x 256:256x256 512:256x256@2x 512:512x512 1024:512x512@2x; do \
+		px=$${spec%%:*}; name=$${spec##*:}; \
+		swift $(ICON_SRC) $$px .build/$(APP_NAME).iconset/icon_$$name.png; \
+	done
+	iconutil -c icns .build/$(APP_NAME).iconset -o $(ICNS)
+	@echo "built $(ICNS)"
+
 ## Assemble and sign the .app in place under $(INSTALL_DIR).
-bundle: build
+bundle: build $(ICNS)
 	rm -rf "$(APP)"
-	mkdir -p "$(APP)/Contents/MacOS"
+	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	cp "$(BUILT)" "$(EXECUTABLE)"
+	cp "$(ICNS)" "$(APP)/Contents/Resources/$(APP_NAME).icns"
 	sed -e 's|@BUNDLE_ID@|$(BUNDLE_ID)|g' \
 	    -e 's|@APP_NAME@|$(APP_NAME)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \

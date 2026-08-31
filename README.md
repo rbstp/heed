@@ -264,21 +264,21 @@ CI runs the tests, a release compile and `check-package` on pull requests. `chec
 because compiling proves very little here: a broken plist, a missing icon or a signature that does
 not verify all build perfectly well.
 
-Release by pushing a bare tag — **not** by creating the release in the GitHub UI:
+Merging a pull request into `master` releases. `.github/workflows/release.yml` works out the next
+version from the latest tag — a PR whose title mentions `feat` takes the minor, anything else the
+patch — then builds the archive, publishes it as a GitHub release, and commits the new version and
+checksum into `Casks/heed.rb` in [rbstp/homebrew-tap](https://github.com/rbstp/homebrew-tap) using
+the `TAP_TOKEN` secret. Those two lines are generated — editing them by hand only invites the cask
+and the release disagreeing.
 
-```sh
-git tag v0.3.0 && git push origin v0.3.0
-```
-
-That runs `.github/workflows/release.yml`, which builds the archive, publishes it as a GitHub
-release, then commits the new version and checksum into `Casks/heed.rb` in
-[rbstp/homebrew-tap](https://github.com/rbstp/homebrew-tap) using the `TAP_TOKEN` secret. Those two
-lines are generated — editing them by hand only invites the cask and the release disagreeing.
+Put `[skip-release]` in the PR title to merge without releasing, and run the workflow by hand from
+the Actions tab to release a specific version.
 
 The repository has immutable releases enabled, so a published release can never gain an asset. The
-workflow therefore drafts the release, attaches the archive, and publishes last. Creating the release
-in the UI publishes it empty before the archive exists, and the workflow then refuses rather than
-pretending it succeeded.
+workflow therefore drafts the release, attaches the archive and publishes last, which leaves a
+fixable draft when a run fails rather than a permanently empty release. Creating a release yourself
+in the UI publishes it empty before any archive exists, which cannot be undone — let the workflow
+do it.
 
 ## Prior art
 

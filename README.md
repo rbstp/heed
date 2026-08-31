@@ -265,8 +265,15 @@ re-focus the same window, which broke the moment focus moved by other means — 
 pointer, switch away with the keyboard, nudge the pointer, and the cache insisted that window was
 already focused. Live system state is the only authority.
 
-`Sources/FFMCore` is the dwell logic with no platform dependency, so the timing rules are covered by
-`swift test` rather than by moving a mouse around and hoping.
+`Sources/FFMCore` holds the decisions that are functions of values rather than of API calls: the
+dwell timing, which element counts as the window, whether a candidate window is eligible, the title
+rules and the motion window. Those are covered by `swift test` rather than by moving a mouse around
+and hoping.
+
+What is deliberately *not* abstracted is the platform behaviour itself. Whether `AXFrontmost` moves
+focus, or whether `AXFocusedApplication` answers at all, cannot be learned from a test double — a
+double returns whatever its author believed, and in both of those cases the belief was the bug. That
+lives in the agent, checked against the running system and logged.
 
 ## Limitations
 

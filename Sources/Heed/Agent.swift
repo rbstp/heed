@@ -329,98 +329,68 @@ final class Agent {
         guard let pid = axPid(element), pid != ownPid else { return nil }
         if let until = blockedUntil[pid], now < until { return nil }
 
-        // Ask for the top level first, but only trust it when it really is a window.
-        //
-        // Asking first matters because kAXWindowAttribute deliberately maps an element inside a
-        // sheet to the window that *owns* the sheet, which would hide the fact that the pointer is
-        // over a sheet. But some apps report a content element as their top level -- an AXList, for
-        // instance -- and taking that at face value made every window of those apps unfocusable.
+        let elementRole = axString(element, kAXRoleAttribute)
         let topLevel = axElement(element, kAXTopLevelUIElementAttribute)
         let topLevelRole = topLevel.flatMap { axString($0, kAXRoleAttribute) }
 
-        if topLevelRole == kAXSheetRole {
-            // The app owning a sheet is already frontmost, so there is nothing useful to do, and
-            // touching it risks disturbing a modal interaction.
+        let sources: [WindowSource]
+        switch resolveWindowSource(topLevelRole: topLevelRole, elementRole: elementRole) {
+        case .sheet:
             Log.debug("skipped: the pointer is over a sheet")
             return nil
+        case .tryInOrder(let order):
+            sources = order
         }
 
-        let container = (topLevelRole == kAXWindowRole ? topLevel : nil)
-            ?? axElement(element, kAXWindowAttribute)
-            ?? (axString(element, kAXRoleAttribute) == kAXWindowRole ? element : nil)
-
-        guard let window = container else {
-            Log.debug("skipped: nothing window-shaped under the pointer "
-                + "(element \(axString(element, kAXRoleAttribute) ?? "?"), "
-                + "top level \(topLevelRole ?? "none"))")
-            return nil
-        }
-
-        let role = axString(window, kAXRoleAttribute)
-        guard role == kAXWindowRole else {
-            Log.debug("skipped: role \(role ?? "nil")")
-            return nil
-        }
-
-        let subrole = axString(window, kAXSubroleAttribute)
-
-        // Only ordinary document/app windows are eligible for pointer focus.
-        //
-        // An allowlist rather than a blocklist, which is both simpler and safer: every real window
-        // across the apps on this machine -- Electron ones (Slack, Notion, Docker Desktop) included
-        // -- reports AXStandardWindow, while transient chrome does not. Enumerating every kind of
-        // panel, alert, HUD and popover to reject would be a losing game.
-        //
-        // This is what stops something like an Outlook meeting reminder from dragging its whole
-        // application forward just because the pointer crossed it. Focusing such a window is not
-        // useful anyway: keyboard focus can only move by making the app frontmost, which is exactly
-        // the disruption you do not want from a transient pop-up you are trying to dismiss.
-        if config.requireStandardWindow {
-            guard subrole == kAXStandardWindowSubrole else {
-                Log.debug("skipped: subrole \(subrole ?? "none") is not a standard window")
-                return nil
+        var candidateWindow: AXUIElement?
+        for source in sources {
+            switch source {
+            case .topLevel: candidateWindow = topLevel
+            case .windowAttribute: candidateWindow = axElement(element, kAXWindowAttribute)
+            case .hitElement: candidateWindow = element
             }
-        } else if let subrole, [
-            kAXFloatingWindowSubrole, kAXSystemFloatingWindowSubrole,
-            kAXDialogSubrole, kAXSystemDialogSubrole,
-        ].contains(subrole) {
-            Log.debug("skipped: subrole \(subrole)")
+            if candidateWindow != nil { break }
+        }
+        guard let window = candidateWindow else {
+            Log.debug("skipped: nothing window-shaped under the pointer "
+                + "(element \(elementRole ?? "?"), top level \(topLevelRole ?? "none"))")
             return nil
         }
 
-        if axBool(window, kAXModalAttribute) == true { return nil }
-        if axBool(window, kAXMinimizedAttribute) == true { return nil }
-
-        guard let size = axSize(window, kAXSizeAttribute) else { return nil }
-        if size.width < 40 || size.height < 40 { return nil }
-        // No position reported means no geometric identity, rather than a fabricated (0, 0).
-        let frame = axPoint(window, kAXPositionAttribute)
-            .map { CGRect(origin: $0, size: size) } ?? .null
-        let title = axString(window, kAXTitleAttribute)
-
+        // These two need no Accessibility round trip, and hovering an excluded app -- the Dock, at
+        // any screen edge -- is constant. The policy checks both as well and remains the authority;
+        // this only avoids paying for the attribute reads below to arrive at the same answer.
         guard let app = runningApp(pid: pid) else { return nil }
-
-        // .prohibited apps cannot be activated at all. Accessory apps are allowed through: they can
-        // own perfectly ordinary user-facing windows, so activation policy is treated as one signal
-        // rather than as a gate. Role, subrole, size and visibility above are the real policy.
-        if app.activationPolicy == .prohibited { return nil }
-
         let bundle = app.bundleIdentifier
+        guard app.activationPolicy != .prohibited else { return nil }
         if let bundle, config.excludedBundleIDs.contains(bundle) {
             Log.debug("skipped: excluded \(bundle)")
             return nil
         }
 
-        // Windows that pass every structural check but are still transient chrome. Matches on
-        // AXTitle, which -- unlike CGWindowList's window names -- needs no Screen Recording grant.
-        // The title is only fetched when a rule could apply, so most windows cost nothing here.
-        let rules = config.titleExclusions.filter { $0.applies(toBundleID: bundle) }
-        if !rules.isEmpty, let title {
-            if titleIsExcluded(title, bundleID: bundle, rules: rules) {
-                Log.debug("skipped: title \"\(title)\" matches a transient-window rule")
-                return nil
-            }
+        let size = axSize(window, kAXSizeAttribute)
+        let title = axString(window, kAXTitleAttribute)
+        let candidate = WindowCandidate(
+            role: axString(window, kAXRoleAttribute),
+            subrole: axString(window, kAXSubroleAttribute),
+            isModal: axBool(window, kAXModalAttribute) == true,
+            isMinimized: axBool(window, kAXMinimizedAttribute) == true,
+            size: size,
+            title: title,
+            bundleID: bundle,
+            canActivate: true
+        )
+
+        if case let .reject(why) = evaluate(candidate, policy: config.windowPolicy) {
+            Log.debug("skipped: \(why)")
+            return nil
         }
+
+        // Rejected above when absent; unwrapped here only to build the frame.
+        guard let size else { return nil }
+        // No position reported means no geometric identity, rather than a fabricated (0, 0).
+        let frame = axPoint(window, kAXPositionAttribute)
+            .map { CGRect(origin: $0, size: size) } ?? .null
 
         let name = app.localizedName ?? bundle ?? "pid \(pid)"
         if name != lastResolvedName {
@@ -689,24 +659,40 @@ final class Agent {
         if let element = hit {
             let elementRole = axString(element, kAXRoleAttribute)
             print("  element role:       \(elementRole ?? "-")")
-            // Same three-step resolution the agent uses, including the case where the hit element is
-            // itself the window and both container attributes are absent.
-            let container = axElement(element, kAXTopLevelUIElementAttribute)
-                ?? axElement(element, kAXWindowAttribute)
-                ?? (elementRole == kAXWindowRole ? element : nil)
-            if let container {
-                let via = axElement(element, kAXTopLevelUIElementAttribute) != nil ? "AXTopLevelUIElement"
-                    : axElement(element, kAXWindowAttribute) != nil ? "AXWindow"
-                    : "the hit element is itself the window"
-                print("  resolved via:       \(via)")
-                print("  top-level role:     \(axString(container, kAXRoleAttribute) ?? "-")")
-                print("  subrole:            \(axString(container, kAXSubroleAttribute) ?? "-")")
-                if let size = axSize(container, kAXSizeAttribute) {
+
+            // Uses the same resolution the agent does, rather than a second copy of the rules: a
+            // diagnostic that disagrees with the code it is diagnosing is worse than none.
+            let topLevel = axElement(element, kAXTopLevelUIElementAttribute)
+            let topLevelRole = topLevel.flatMap { axString($0, kAXRoleAttribute) }
+            print("  top-level role:     \(topLevelRole ?? "-")")
+
+            var window: AXUIElement?
+            switch resolveWindowSource(topLevelRole: topLevelRole, elementRole: elementRole) {
+            case .sheet:
+                print("  resolved via:       nothing -- the pointer is over a sheet")
+            case .tryInOrder(let order):
+                for source in order {
+                    switch source {
+                    case .topLevel: window = topLevel
+                    case .windowAttribute: window = axElement(element, kAXWindowAttribute)
+                    case .hitElement: window = element
+                    }
+                    if window != nil {
+                        print("  resolved via:       \(source)")
+                        break
+                    }
+                }
+                if window == nil { print("  resolved via:       nothing window-shaped") }
+            }
+
+            if let window {
+                print("  subrole:            \(axString(window, kAXSubroleAttribute) ?? "-")")
+                if let size = axSize(window, kAXSizeAttribute) {
                     print("  size:               \(Int(size.width))x\(Int(size.height))")
                 }
-                print("  title:              \(axString(container, kAXTitleAttribute) ?? "-")")
-                print("  AXMain settable:    \(axIsSettable(container, kAXMainAttribute))")
-                print("  AXFocused settable: \(axIsSettable(container, kAXFocusedAttribute))")
+                print("  title:              \(axString(window, kAXTitleAttribute) ?? "-")")
+                print("  AXMain settable:    \(axIsSettable(window, kAXMainAttribute))")
+                print("  AXFocused settable: \(axIsSettable(window, kAXFocusedAttribute))")
             }
         }
 

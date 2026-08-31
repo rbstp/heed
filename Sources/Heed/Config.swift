@@ -21,6 +21,15 @@ struct Config {
     var verbose = false
     var excludedBundleIDs: Set<String> = []
 
+    /// The tested policy in FFMCore, built from these settings.
+    var windowPolicy: WindowPolicy {
+        WindowPolicy(
+            requireStandardWindow: requireStandardWindow,
+            excludedBundleIDs: excludedBundleIDs,
+            titleRules: titleExclusions
+        )
+    }
+
     var dwell: Double { Double(dwellMs) / 1000 }
     var poll: Double { Double(pollMs) / 1000 }
     var typingCooldown: Double { Double(typingCooldownMs) / 1000 }

@@ -21,6 +21,13 @@ final class Agent {
     private var hotkey: Hotkey?
     private var shortcut: HotkeySpec?
 
+    /// What the timer is currently scheduled at, so retiming is a no-op when nothing changed.
+    private var interval: Double = 0
+    /// Main thread only. Mirrors "the loop is idling, wake it", so a mouse event costs one bool test
+    /// rather than a dispatch hop -- and events arrive far faster than the loop ever ticked.
+    private var wantsMouseWake = false
+    private var mouseMonitor: Any?
+
     private var lastCursor = CGPoint(x: CGFloat.infinity, y: CGFloat.infinity)
     private var pendingInvalidation = false
 
@@ -90,7 +97,10 @@ final class Agent {
     }
 
     fileprivate func noteDisplayReconfiguration() {
-        queue.async { self.pendingInvalidation = true }
+        queue.async {
+            self.pendingInvalidation = true
+            self.wakeLoop()
+        }
     }
 
     private func scheduleTimer() {
@@ -101,13 +111,45 @@ final class Agent {
         // Disabled means no timer rather than a tick that wakes 25 times a second to return
         // immediately. Everything that can flip `enabled` -- the menu bar, a config reload -- comes
         // back through here, so this is the only place that has to know.
-        guard config.enabled else { return }
+        guard config.enabled else {
+            interval = 0
+            setMouseWake(false)
+            return
+        }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + config.poll, repeating: config.poll, leeway: .milliseconds(10))
         timer.setEventHandler { [weak self] in self?.tick() }
         timer.resume()
         self.timer = timer
+        interval = 0
+        retime(to: config.poll, startingNow: false)
+    }
+
+    /// Re-aims the timer, and tells the main thread whether a mouse event should wake it.
+    ///
+    /// Idling gets generous leeway on purpose: it lets the system fire this alongside whatever else
+    /// it was going to wake for, which is most of where the saving comes from -- a timer nobody has
+    /// to wake the CPU for costs close to nothing.
+    private func retime(to wanted: Double, startingNow: Bool) {
+        guard let timer, wanted != interval else { return }
+        interval = wanted
+        let idling = wanted > config.poll
+        timer.schedule(
+            deadline: startingNow ? .now() : .now() + wanted,
+            repeating: wanted,
+            leeway: idling ? .milliseconds(Int(wanted * 500)) : .milliseconds(10)
+        )
+        setMouseWake(idling)
+    }
+
+    private func setMouseWake(_ wanted: Bool) {
+        DispatchQueue.main.async { [self] in wantsMouseWake = wanted }
+    }
+
+    /// Back to the fast cadence, firing at once rather than at the end of the idle interval: the
+    /// pointer has already moved by the time this runs.
+    private func wakeLoop() {
+        retime(to: config.poll, startingNow: true)
     }
 
     /// Forget what the pointer was last resolved to, so the next tick adopts a baseline instead of
@@ -257,6 +299,10 @@ final class Agent {
             isAlreadyFocused: { self.focusMatches($0) }
         )
 
+        // Every return below leaves the cadence to this, so a tick cannot exit and forget to.
+        defer { retime(to: hasPendingWork(cursorMoved: moved) ? config.poll : config.idlePoll,
+                       startingNow: false) }
+
         guard let target else { return }
 
         // Revalidate before acting, even at instant dwell. Time passes regardless of the dwell
@@ -287,6 +333,21 @@ final class Agent {
             // means the next attempt re-derives the target rather than reusing this reference.
             machine.invalidate()
         }
+    }
+
+    /// Whether anything can still change without new input from outside.
+    ///
+    /// False means the pointer is parked, no dwell or forced hit test is outstanding, and no timer
+    /// of our own is due -- so ticking 25 times a second only proves the pointer is still parked. A
+    /// mouse event wakes it again, and the idle heartbeat is the safety net for anything that never
+    /// sends one.
+    private func hasPendingWork(cursorMoved: Bool) -> Bool {
+        if cursorMoved || pendingInvalidation || machine.needsTick { return true }
+        if now < hitTestCooldownUntil { return true }
+        // A block expiring changes what is focusable with nothing to announce it, and `tick` relies
+        // on being there to notice.
+        if let soonest = blockedUntil.values.min(), soonest > now { return true }
+        return false
     }
 
     // MARK: - Guards
@@ -774,7 +835,10 @@ final class Agent {
         ] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
-                queue.async { self.pendingInvalidation = true }
+                queue.async {
+                    self.pendingInvalidation = true
+                    self.wakeLoop()   // an idling loop must not sit on this for a whole heartbeat
+                }
             }
         }
 
@@ -790,6 +854,23 @@ final class Agent {
                 self.blockedUntil[pid] = nil
                 self.failureCounts[pid] = nil
             }
+        }
+
+        // Pointer movement, which is the whole input to this program, arrives as events rather than
+        // being polled for. A global monitor sees what is delivered to other applications, which is
+        // every application but this one.
+        //
+        // It is an optimisation, not the mechanism: everything still works if it never fires, just
+        // with up to `idlePollMs` of latency instead of none, which is why the heartbeat is a
+        // second rather than a minute. Mouse-up is in the mask because a click can change what is
+        // frontmost without the pointer travelling a pixel.
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+                       .leftMouseUp, .rightMouseUp, .otherMouseUp]
+        ) { [weak self] _ in
+            guard let self, wantsMouseWake else { return }
+            wantsMouseWake = false
+            queue.async { self.wakeLoop() }
         }
 
         // The callback is a bare C function pointer, but it takes a context pointer, so it can hand

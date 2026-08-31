@@ -10,6 +10,7 @@ struct Config {
     var hotkey = "cmd+ctrl+h"
     var dwellMs = 0
     var pollMs = 40
+    var idlePollMs = 1_000
     var raise = true
     var typingCooldownMs = 500
     var clickGraceMs = 150
@@ -38,6 +39,9 @@ struct Config {
 
     var dwell: Double { Double(dwellMs) / 1000 }
     var poll: Double { Double(pollMs) / 1000 }
+    /// Never faster than `poll`: a "slow" heartbeat that outpaced the fast one would just be more
+    /// wakeups under another name.
+    var idlePoll: Double { max(Double(idlePollMs) / 1000, poll) }
     var typingCooldown: Double { Double(typingCooldownMs) / 1000 }
     var clickGrace: Double { Double(clickGraceMs) / 1000 }
     var verifyTimeout: Double { Double(verifyTimeoutMs) / 1000 }
@@ -130,6 +134,7 @@ struct Config {
         }
         config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
         config.pollMs = int("pollMs", config.pollMs, 10...1_000)
+        config.idlePollMs = int("idlePollMs", config.idlePollMs, 100...10_000)
         config.raise = bool("raise", config.raise)
         config.typingCooldownMs = int("typingCooldownMs", config.typingCooldownMs, 0...5_000)
         config.clickGraceMs = int("clickGraceMs", config.clickGraceMs, 0...2_000)

@@ -98,7 +98,8 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 | `menuBarIcon` | `true` | Show the cube in the menu bar. See *Turning it on and off* above. |
 | `hotkey` | `cmd+ctrl+h` | Global combination that toggles Heed. Empty string disables it. |
 | `dwellMs` | `0` | How long the pointer must rest on a window before focus follows. `0` is instant. Raise it to ~200 if sweeping the pointer across windows churns focus more than you like. |
-| `pollMs` | `40` | Cursor sampling interval. |
+| `pollMs` | `40` | Cursor sampling interval while there is something to watch. |
+| `idlePollMs` | `1000` | Sampling interval once the pointer is parked and nothing is pending. A mouse event restores `pollMs` immediately, so this is the safety net rather than the mechanism — see *How it works*. |
 | `raise` | `true` | Also raise the window. See *Focus and raise* below. |
 | `typingCooldownMs` | `500` | Ignore the pointer for this long after a keystroke. |
 | `clickGraceMs` | `150` | Ignore the pointer for this long after a mouse press or release. Releases count so the grace survives a long drag — it starts at the drop, not at the grab. Short: unlike typing, this exists only to cover clicks that begin and end between two polls, which an instantaneous button check cannot see. |
@@ -281,9 +282,9 @@ platform constraint, not a missing feature.
 
 ## How it works
 
-1. Sample the cursor with `CGEvent.location` at `pollMs`. Already in top-left screen coordinates,
-   which is what Accessibility uses — `NSEvent.mouseLocation` is bottom-left and silently mis-targets
-   on multi-display setups.
+1. Sample the cursor with `CGEvent.location` at `pollMs`, but only while there is something to
+   watch (below). Already in top-left screen coordinates, which is what Accessibility uses —
+   `NSEvent.mouseLocation` is bottom-left and silently mis-targets on multi-display setups.
 2. When the pointer moved, hit-test with `AXUIElementCopyElementAtPosition`, which is z-order aware.
    This is what lets the whole thing stay on public API: identifying a window this way avoids having
    to map a `CGWindowID` onto an `AXUIElement`, which is what pushes yabai, AeroSpace and Amethyst
@@ -295,6 +296,21 @@ platform constraint, not a missing feature.
 4. Order the window within its app (`AXRaise` + `AXMain`), then move focus:
    `NSRunningApplication.activate`, plus `AXFrontmost` and `AXFocused` as cheap extra writes. Confirm
    it actually moved, with a tight budget.
+
+**The loop stops sampling when the pointer does.** A window can only be entered by moving onto it, so
+a pointer parked over a window that has already been resolved has nothing left to say, and sampling
+it 25 times a second only proves it is still parked. The timer drops to `idlePollMs` with half of
+that as leeway, which lets the system fire it alongside whatever else it was going to wake for —
+measured here, 25 wakeups a second becomes about one. A global mouse monitor snaps it back to
+`pollMs` on the first event, firing that tick immediately rather than at the end of the interval, so
+what this costs is wakeups rather than latency.
+
+Movement is not the only thing worth waiting for, so the loop also stays fast while a dwell is
+running, while a hit test has been armed by a suppression or a Space change, and while an
+unresponsive app's circuit breaker is still counting down. That last one matters more than it
+sounds: a block expiring changes what is focusable with nothing to announce it.
+`DwellMachine.needsTick` is the tested half of that decision. The heartbeat is the safety net — if
+the monitor never fires, everything still works, just up to `idlePollMs` late.
 
 Confirmation reads focus back rather than trusting return codes, because a successful write proves
 nothing here. Three measurements shaped this, and each was the opposite of what the API surface

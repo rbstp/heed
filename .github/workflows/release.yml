@@ -50,7 +50,14 @@ jobs:
           TAG: ${{ github.ref_name }}
 
       - name: publish the release
-        run: gh release create "$TAG" --verify-tag --generate-notes "$ZIP"
+        run: |
+          # The release may already exist: publishing one from the GitHub UI pushes the tag, and that
+          # push is what triggers this run. Attach the archive either way, and let a re-run replace it.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+          else
+            gh release create "$TAG" --verify-tag --generate-notes "$ZIP"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}

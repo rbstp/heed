@@ -19,10 +19,19 @@ if let flag = CommandLine.arguments.firstIndex(of: "--probe") {
     exit(0)
 }
 
+// A status item needs an application object: NSStatusBar hands items out over the window server
+// connection NSApplication establishes, and a click on one arrives as an event only NSApplication's
+// loop pulls. `.accessory` states LSUIElement's promise in code -- no Dock icon, no menu of our own
+// -- which also covers running as a bare binary, where there is no Info.plist to read it from.
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+
 Log.note("Heed starting (\(bundleID))")
 
-// Before the permission gate: a reload request must work whether or not the agent got that far.
+// Both before the permission gate: a reload request must work whether or not the agent got that
+// far, and the icon should be there to say the grant is what is missing.
 agent.installSignalHandlers()
+agent.installMenuBar()
 var permissionWaiter: DispatchSourceTimer?
 
 if accessibilityTrusted(prompt: true) {
@@ -52,6 +61,8 @@ if accessibilityTrusted(prompt: true) {
     permissionWaiter = waiter
 }
 
-// A run loop, not dispatchMain(): NSWorkspace notifications (Space changes, wake, app termination)
-// are delivered through the main run loop, and this also services the main dispatch queue.
-RunLoop.main.run()
+// NSApplication's loop, not RunLoop.main.run() and not dispatchMain(). All three service the main
+// run loop, which is how NSWorkspace notifications (Space changes, wake, app termination) and the
+// main dispatch queue arrive; only this one also pulls window server events, without which the menu
+// bar item draws but cannot be clicked.
+app.run()

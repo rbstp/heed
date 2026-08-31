@@ -14,6 +14,10 @@ final class Agent {
     private var machine: DwellMachine<Target>
     private var timer: DispatchSourceTimer?
 
+    /// The menu bar item, and the one piece of state here that belongs to the main thread rather
+    /// than to `queue`. `syncMenuBar` is the hop between the two.
+    private var menuBar: MenuBarController?
+
     private var lastCursor = CGPoint(x: CGFloat.infinity, y: CGFloat.infinity)
     private var pendingInvalidation = false
 
@@ -74,9 +78,11 @@ final class Agent {
 
             isRunning = true
             scheduleTimer()
-            Log.note("running: dwell=\(config.dwellMs)ms poll=\(config.pollMs)ms "
-                + "raise=\(config.raise) typingCooldown=\(config.typingCooldownMs)ms "
-                + "verbose=\(config.verbose)")
+            // The icon was dimmed while the Accessibility grant was outstanding; it is not now.
+            syncMenuBar()
+            Log.note("running: enabled=\(config.enabled) dwell=\(config.dwellMs)ms "
+                + "poll=\(config.pollMs)ms raise=\(config.raise) "
+                + "typingCooldown=\(config.typingCooldownMs)ms verbose=\(config.verbose)")
         }
     }
 
@@ -86,7 +92,14 @@ final class Agent {
 
     private func scheduleTimer() {
         timer?.cancel()
+        timer = nil
         motion = MotionTracker(capacity: max(2, Int((0.2 / config.poll).rounded())))
+
+        // Disabled means no timer rather than a tick that wakes 25 times a second to return
+        // immediately. Everything that can flip `enabled` -- the menu bar, a config reload -- comes
+        // back through here, so this is the only place that has to know.
+        guard config.enabled else { return }
+
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + config.poll, repeating: config.poll, leeway: .milliseconds(10))
         timer.setEventHandler { [weak self] in self?.tick() }
@@ -94,15 +107,77 @@ final class Agent {
         self.timer = timer
     }
 
+    /// Forget what the pointer was last resolved to, so the next tick adopts a baseline instead of
+    /// acting on it.
+    ///
+    /// This is what `.invalidating` does inside `tick`, for the two paths that re-evaluate from
+    /// outside it. `machine.invalidate()` alone is not enough and is the more dangerous half: it
+    /// forces a hit test, and a target equal to the surviving `lastResolved` passes the entry-motion
+    /// guard on the strength of a baseline set before the pause. Keyboard focus moved elsewhere in
+    /// the meantime would be dragged back to the window under a pointer that never moved.
+    private func forgetTarget() {
+        machine.invalidate()
+        motion.reset()
+        lastResolved = nil
+    }
+
     private func reload() {
         queue.async { [self] in
             config = Config.load()
             Log.verbose = config.verbose
             machine.dwell = config.dwell
-            machine.invalidate()
+            forgetTarget()
             if isRunning { scheduleTimer() }   // pollMs may have changed
+            syncMenuBar()
             Log.note("reloaded config: dwell=\(config.dwellMs)ms poll=\(config.pollMs)ms "
                 + "raise=\(config.raise) enabled=\(config.enabled)")
+        }
+    }
+
+    // MARK: - Menu bar
+
+    /// Installed from the launch path rather than from `start()`, so the icon is there whether or
+    /// not the Accessibility grant has arrived.
+    func installMenuBar() {
+        queue.async { [self] in syncMenuBar() }
+    }
+
+    /// The click handler, and the only thing that changes `enabled` at runtime.
+    ///
+    /// It writes the same defaults key `defaults write` does, so the choice survives a restart and
+    /// the icon and the configuration cannot come to disagree.
+    func toggleEnabled() {
+        queue.async { [self] in
+            let value = !config.enabled
+            config.enabled = value
+            Config.store().set(value, forKey: "enabled")
+
+            // Turning it back on must not act on what the pointer was over minutes ago.
+            forgetTarget()
+            if isRunning { scheduleTimer() }
+
+            Log.note(value ? "enabled from the menu bar" : "disabled from the menu bar")
+            syncMenuBar()
+        }
+    }
+
+    /// Push the current state into the menu bar. Called on `queue`; the item is main-thread only, so
+    /// the values are read here and applied there.
+    private func syncMenuBar() {
+        let wanted = config.menuBarIcon
+        let enabled = config.enabled
+        DispatchQueue.main.async { [self] in
+            guard wanted else {
+                menuBar?.remove()
+                menuBar = nil
+                return
+            }
+            if menuBar == nil {
+                menuBar = MenuBarController { [weak self] in self?.toggleEnabled() }
+            }
+            // Trust is read here rather than carried across the hop: it can change at any moment,
+            // and it is what decides whether the icon claims to be working.
+            menuBar?.render(enabled: enabled, trusted: accessibilityTrusted(prompt: false))
         }
     }
 
@@ -320,6 +395,7 @@ final class Agent {
         // and an unrotated log must not pay by the hour for a permission revoked mid-run.
         if accessibilityLost, error != .apiDisabled {
             accessibilityLost = false
+            syncMenuBar()
             Log.note("Accessibility access returned")
         }
 
@@ -344,6 +420,8 @@ final class Agent {
         case .apiDisabled:
             if !accessibilityLost {
                 accessibilityLost = true
+                // Undimmed, the icon would go on claiming to work after the grant was revoked.
+                syncMenuBar()
                 Log.note("Accessibility access is no longer granted; waiting for it to return")
             }
             return nil

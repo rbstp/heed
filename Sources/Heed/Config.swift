@@ -9,7 +9,7 @@ struct Config {
     var pollMs = 40
     var raise = true
     var typingCooldownMs = 500
-    var verifyTimeoutMs = 600
+    var verifyTimeoutMs = 100
     var entryMotionPx = 6
     var ignoreWhenCommandHeld = true
     var menuGuard = true

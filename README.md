@@ -32,7 +32,7 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 | `raise` | `true` | Also raise the window. See *Focus and raise* below. |
 | `typingCooldownMs` | `500` | Ignore the pointer for this long after a keystroke. |
 | `entryMotionPx` | `6` | Pointer travel (in points, over roughly the last 200 ms) required before a *different* window may take focus. Stops windows that appear under a still pointer from taking it. `0` disables. |
-| `verifyTimeoutMs` | `600` | How long to wait for focus to actually land before trying the next fallback. Electron apps activate noticeably slower than native ones. |
+| `verifyTimeoutMs` | `100` | How long to wait for focus to land before giving up on this attempt. Spent with the agent blocked, so it is deliberately tight — the mechanism that works confirms in roughly 25 ms, and a failure just retries on the next tick. |
 | `ignoreWhenCommandHeld` | `true` | Ignore the pointer while ⌘ is down, so Cmd-Tab is not fought. |
 | `menuGuard` | `true` | Ignore the pointer while a menu, popover or drag image is on screen. |
 | `requireStandardWindow` | `true` | Only focus ordinary windows (`AXStandardWindow`). Keeps transient pop-ups from dragging their app forward -- see *Transient windows* below. Set `false` if an app you use exposes windows that don't report a standard subrole. |
@@ -86,8 +86,8 @@ result
   already focused:    true
 ```
 
-`make logs` with `verbose true` shows the running decisions, including which fallback rung each app
-responded to and why a window was skipped.
+`make logs` with `verbose true` shows the running decisions, including which focus mechanism each app
+responded to, how long it took to land, and why a window was skipped.
 
 ## Signing, and why it decides whether you keep re-granting
 
@@ -222,14 +222,30 @@ is a platform constraint, not a missing feature.
 3. Resolve the window via `AXTopLevelUIElement`, then `AXWindow`, then the element itself. That order
    matters: `AXWindow` maps an element inside a sheet to the window that *owns* the sheet, which
    would hide the fact that the pointer is over a sheet.
-4. Apply focus through a ladder, stopping at the first rung that **verifiably** worked:
-   `AXRaise` + `AXMain` + `AXFrontmost`; then `AXFocused` where the window accepts it; then
-   `NSRunningApplication.activate`.
+4. Order the window within its app (`AXRaise` + `AXMain`), then move focus:
+   `NSRunningApplication.activate`, plus `AXFrontmost` and `AXFocused` as cheap extra writes. Confirm
+   it actually moved, with a tight budget.
 
-Step 4 verifies by reading focus back rather than trusting return codes, because writing those
-attributes successfully does not mean focus moved: `AXMain` is documented as not implying key focus,
-and `AXRaise` can report failure even when it worked. Which rung an app honours differs between
-apps and can only be observed, so it is logged.
+Confirmation reads focus back rather than trusting return codes, because a successful write proves
+nothing here. Three measurements shaped this, and each was the opposite of what the API surface
+suggests:
+
+- **`AXFrontmost` does not move focus on macOS 27.** It reports `settable = true`, the write returns
+  success, and the frontmost app does not change. AppKit activation is what works — every app tested,
+  including Electron ones and System Settings, moved via `activate` and none via `AXFrontmost`.
+- **`AXFocusedApplication` on the system-wide element returns nothing** whenever the focused app has
+  no usable Accessibility tree, so `NSWorkspace.frontmostApplication` answers that question instead.
+  Used as the "is this already focused?" check it was worse than useless: it said "no" for
+  everything, so focus was re-applied on every tick.
+- **Waiting is the expensive part.** Confirmation blocks the agent's loop, so everything is fired in
+  one go and confirmed once, rather than verified step by step. Verifying each write separately cost
+  up to three waits per switch, which is what a sluggish, fighting focus feels like. Nothing is lost
+  by being impatient — the pointer is still over the target, so a failed attempt just retries on the
+  next tick.
+
+`activate` is documented as best-effort and cooperative activation can refuse it, which does happen:
+System Settings sometimes holds on to activation for a beat. That is why the attempt is cheap and
+repeatable instead of exhaustive.
 
 The agent holds no memory of what it last focused. An earlier design cached it and refused to
 re-focus the same window, which broke the moment focus moved by other means — focus a window with the

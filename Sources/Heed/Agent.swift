@@ -42,9 +42,6 @@ final class Agent {
     private var hitTestFailures = 0
     private var hitTestCooldownUntil: Double = 0
 
-    /// Which rung of the focus ladder last worked, per app. Logged on change: which sequence a given
-    /// app honours can only be discovered by observation, so this is the record of it.
-    private var rungByApp: [String: Int] = [:]
 
     /// Last target named in the log, so verbose mode reports each window once on entry rather than
     /// 25 times a second while the pointer moves across it.
@@ -386,114 +383,99 @@ final class Agent {
 
     // MARK: - Applying focus
 
-    /// Try each rung in turn, stopping at the first that verifiably moved focus.
+    /// Move focus to a target, then confirm it actually moved.
     ///
-    /// Every rung is checked by reading focus back rather than by trusting return codes. Writing
-    /// these attributes successfully does not mean focus moved: AXMain is documented as not
-    /// implying key focus, and AXRaise can report failure even when it worked. Verification is what
-    /// makes per-app differences observable instead of guessed at.
+    /// Everything is fired in one go rather than as separately verified steps. Verification is the
+    /// only expensive part -- it blocks this queue while it waits -- and measurement showed that on
+    /// this OS only `activate` ever moves focus: `AXFrontmost` reports `settable = true`, the write
+    /// returns success, and the frontmost app does not change. Waiting after each write to discover
+    /// that was pure latency, up to three times per switch, which is what a sluggish, fighting focus
+    /// felt like.
+    ///
+    /// The Accessibility writes stay because they cost one message each and may matter on an app not
+    /// tested here. They are no longer waited on.
     private func applyFocus(to target: Target) -> Bool {
         let app = appElement(for: target.pid)
-        var attempted: [Int] = []
 
-        // Rung 1: the sequence that works for most native apps. Raise and mark the window first so
-        // the right window is forward at the moment the app becomes frontmost.
-        attempted.append(1)
+        // Order the window within its app first: this is what decides which of the app's windows
+        // ends up in front once it activates.
         if let window = target.window {
             if config.raise { AXUIElementPerformAction(window, kAXRaiseAction as CFString) }
             axSet(window, kAXMainAttribute, kCFBooleanTrue)
         }
-        axSet(app, kAXFrontmostAttribute, kCFBooleanTrue)
-        if verifyFocus(target) { return succeeded(target, rung: 1) }
 
-        // Rung 2: AXFocused, but only where this particular window accepts it -- settability is
-        // per-element, and it is not writable on many windows.
-        if let window = target.window, axIsSettable(window, kAXFocusedAttribute) {
-            attempted.append(2)
-            axSet(window, kAXFocusedAttribute, kCFBooleanTrue)
-            if verifyFocus(target) { return succeeded(target, rung: 2) }
-        }
-
-        // Rung 3: AppKit activation. Not guaranteed and it cannot be forced past the frontmost app,
-        // but it is not deprecated either and it reaches some apps the Accessibility writes do not.
-        attempted.append(3)
         NSRunningApplication(processIdentifier: target.pid)?.activate(options: [])
-        if verifyFocus(target) { return succeeded(target, rung: 3) }
-
-        noteFailure(pid: target.pid)
-        Log.debug("failed to focus \(target.describedAs) after rungs \(attempted)")
-        return false
-    }
-
-    private func succeeded(_ target: Target, rung: Int) -> Bool {
-        failureCounts[target.pid] = 0
-        let key = target.bundleID ?? target.describedAs
-        if rungByApp[key] != rung {
-            rungByApp[key] = rung
-            Log.note("focus \(target.describedAs): rung \(rung)"
-                + (target.window == nil ? " (app level)" : ""))
+        axSet(app, kAXFrontmostAttribute, kCFBooleanTrue)
+        if let window = target.window, axIsSettable(window, kAXFocusedAttribute) {
+            axSet(window, kAXFocusedAttribute, kCFBooleanTrue)
         }
-        Log.debug("focused \(target.describedAs) via rung \(rung)")
+
+        guard verifyFocus(target) else {
+            noteFailure(pid: target.pid)
+            return false
+        }
+        failureCounts[target.pid] = 0
         return true
     }
 
     /// Wait for focus to actually land, and say how long it took.
     ///
-    /// Verifies at application level, not window level. Window identity is not solid enough to gate
-    /// on: Electron apps return a different AXUIElement instance for the same window depending on
-    /// whether it came from a position hit test or from AXFocusedWindow, so a window-level check
-    /// reported failure even when focus had moved. Making the app frontmost is the part that moves
-    /// keyboard focus anyway, so it is the part worth verifying; the right window within the app is
-    /// handled by AXRaise + AXMain on the way in.
+    /// Asks NSWorkspace which app is frontmost, not the Accessibility API. `AXFocusedApplication` on
+    /// the system-wide element looks like the natural choice and is what an earlier version used, but
+    /// on this OS it returns nothing at all whenever the focused app has no usable AX tree -- so it
+    /// failed for precisely the apps most likely to need the fallback rungs, and it also made
+    /// `focusMatches` below answer "not focused" for everything. That is worse than a wrong answer:
+    /// it meant focus was re-applied on every tick, each attempt walking all three rungs and blocking
+    /// this queue, which showed up as windows visibly fighting each other for the front.
     ///
-    /// The timeout matters more than it looks. An earlier version waited about 80ms per rung, which
-    /// is fine for a native app but not for Electron ones -- Slack and Spotify activate more slowly
-    /// than that, so they were declared failures, escalated through the remaining rungs and then
-    /// blacklisted by the circuit breaker, even though focus had in fact moved. The elapsed time is
-    /// logged on success so this is a measurement rather than a guess.
+    /// Verification is app-level. Making the app frontmost is the part that moves keyboard focus, so
+    /// it is the part worth checking; the right window within the app is handled by AXRaise + AXMain
+    /// on the way in. The elapsed time is logged so this stays a measurement rather than a guess.
+    /// This budget is spent with the agent's queue blocked, so it is deliberately tight. An earlier
+    /// 600ms turned a refusal into 1.2s of frozen agent across two rungs, which is exactly what a
+    /// stuttering, fighting focus feels like. Nothing is lost by being impatient: the pointer is
+    /// still over the target, so a failure simply retries on the next tick.
     private func verifyFocus(_ target: Target) -> Bool {
         let started = now
         while true {
-            if let focusedApp = axElement(systemWide, kAXFocusedApplicationAttribute),
-               let pid = axPid(focusedApp) {
-                if pid == target.pid {
-                    let waited = Int((now - started) * 1000)
-                    if waited > 0 { Log.debug("focus confirmed after \(waited)ms") }
-                    return true
-                }
-                if now - started >= config.verifyTimeout {
-                    let holder = NSRunningApplication(processIdentifier: pid)?.localizedName
-                        ?? "pid \(pid)"
-                    Log.debug("verify timed out after \(config.verifyTimeoutMs)ms: "
-                        + "focus is on \(holder), wanted \(target.describedAs)")
-                    return false
-                }
-            } else if now - started >= config.verifyTimeout {
-                Log.debug("verify timed out: no focused application reported")
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid {
+                Log.debug("focused \(target.describedAs) in \(Int((now - started) * 1000))ms")
+                return true
+            }
+            if now - started >= config.verifyTimeout {
+                let holder = NSWorkspace.shared.frontmostApplication?.localizedName ?? "nothing"
+                Log.debug("verify timed out after \(config.verifyTimeoutMs)ms: "
+                    + "focus is on \(holder), wanted \(target.describedAs)")
                 return false
             }
-            usleep(25_000)
+            usleep(10_000)
         }
     }
 
-    /// Live check against real system focus, used both to verify an attempt and to decide whether
-    /// focusing is needed at all.
+    /// Live check against real system focus, used to decide whether focusing is needed at all.
     private func focusMatches(_ target: Target) -> Bool {
-        guard let focusedApp = axElement(systemWide, kAXFocusedApplicationAttribute),
-              let focusedPid = axPid(focusedApp),
-              focusedPid == target.pid
-        else { return false }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else {
+            return false
+        }
 
         // App-level fallback targets have no window to compare.
         guard let window = target.window else { return true }
 
-        guard let focusedWindow = axElement(focusedApp, kAXFocusedWindowAttribute) else { return false }
+        // The app's own focused window, rather than going through the system-wide element.
+        let app = appElement(for: target.pid)
+        guard let focusedWindow = axElement(app, kAXFocusedWindowAttribute) else {
+            // No usable answer: treat the app being frontmost as good enough rather than
+            // re-focusing forever.
+            return true
+        }
         if CFEqual(focusedWindow, window) { return true }
-        // Same tolerance as Target equality, for the same Electron reason.
-        guard let focusedOrigin = axPoint(focusedWindow, kAXPositionAttribute),
-              let focusedSize = axSize(focusedWindow, kAXSizeAttribute)
-        else { return false }
-        return CGRect(origin: focusedOrigin, size: focusedSize) == target.frame
+
+        // Electron hands back a different instance for the same window depending on how it was
+        // obtained, so fall back to the frame captured at hit-test time.
+        guard let origin = axPoint(focusedWindow, kAXPositionAttribute),
+              let size = axSize(focusedWindow, kAXSizeAttribute)
+        else { return true }
+        return CGRect(origin: origin, size: size) == target.frame
     }
 
     private func noteFailure(pid: pid_t) {
@@ -502,7 +484,7 @@ final class Agent {
         if count >= 3 {
             blockedUntil[pid] = now + 10
             failureCounts[pid] = 0
-            Log.debug("pid \(pid) is not responding to focus requests; skipping it for 10s")
+            Log.note("pid \(pid) is not responding to focus requests; skipping it for 10s")
         }
     }
 

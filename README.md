@@ -271,8 +271,9 @@ checksum into `Casks/heed.rb` in [rbstp/homebrew-tap](https://github.com/rbstp/h
 the `TAP_TOKEN` secret. Those two lines are generated — editing them by hand only invites the cask
 and the release disagreeing.
 
-Put `[skip-release]` in the PR title to merge without releasing, and run the workflow by hand from
-the Actions tab to release a specific version.
+A PR that changes nothing outside `.github/` does not release — it ships no binary. For anything
+else, put `[skip-release]` in the PR title to merge without releasing, and run the workflow by hand
+from the Actions tab to release a specific version.
 
 The repository has immutable releases enabled, so a published release can never gain an asset. The
 workflow therefore drafts the release, attaches the archive and publishes last, which leaves a

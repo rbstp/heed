@@ -6,6 +6,9 @@ on:
       - closed
     branches:
       - master
+    # A CI-only PR ships no binary: this runs only when a changed file falls outside the list.
+    paths-ignore:
+      - .github/**
   workflow_dispatch:
     inputs:
       version:

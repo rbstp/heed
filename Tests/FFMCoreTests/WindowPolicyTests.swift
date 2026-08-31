@@ -40,6 +40,91 @@ final class WindowSourceTests: XCTestCase {
     }
 }
 
+final class FocusHolderTests: XCTestCase {
+
+    /// The motivating case: an About panel (CodeBurn's reports subrole AXDialog and an empty
+    /// title) opened from the menu, immediately robbed of key status by the sibling window still
+    /// sitting under the pointer.
+    func testDialogsHoldFocusAgainstTheirSiblings() {
+        XCTAssertTrue(transientWindowHoldsFocus(subrole: kAXDialogSubrole))
+        XCTAssertTrue(transientWindowHoldsFocus(subrole: kAXSystemDialogSubrole))
+    }
+
+    func testFloatingPanelsHoldFocus() {
+        XCTAssertTrue(transientWindowHoldsFocus(subrole: kAXFloatingWindowSubrole))
+        XCTAssertTrue(transientWindowHoldsFocus(subrole: kAXSystemFloatingWindowSubrole))
+    }
+
+    /// An ordinary sibling window must not hold: switching between two documents of one app with
+    /// the pointer is the tool's core use.
+    func testAStandardWindowDoesNotHoldFocus() {
+        XCTAssertFalse(transientWindowHoldsFocus(subrole: kAXStandardWindowSubrole))
+    }
+
+    func testUnknownSubrolesDoNotHoldFocus() {
+        XCTAssertFalse(transientWindowHoldsFocus(subrole: nil))
+        XCTAssertFalse(transientWindowHoldsFocus(subrole: kAXUnknownSubrole))
+        XCTAssertFalse(transientWindowHoldsFocus(subrole: "AXSomethingCustom"))
+    }
+}
+
+final class PromptTests: XCTestCase {
+    private let finderPrompt = [PromptRule(bundleID: "com.apple.finder", identifier: "Progress")]
+
+    /// The motivating case: Finder asking whether to replace a dropped file. Subrole
+    /// AXStandardWindow, localized title, but a stable identifier and a row of answer buttons.
+    func testFindersReplaceQuestionAwaitsAnswer() {
+        XCTAssertTrue(windowAwaitsAnswer(
+            identifier: "Progress", bundleID: "com.apple.finder",
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+    }
+
+    /// The same window in its idle form -- a copy in progress -- has no window-level buttons, and
+    /// a lone Stop button is not a question. Holding there would freeze pointer focus for the
+    /// length of a big copy.
+    func testPlainProgressDoesNotHoldFocus() {
+        for buttons in [0, 1] {
+            XCTAssertFalse(windowAwaitsAnswer(
+                identifier: "Progress", bundleID: "com.apple.finder",
+                buttonCount: buttons, promptRules: finderPrompt
+            ), "\(buttons) window-level button(s) is not a question")
+        }
+    }
+
+    func testOrdinaryFinderWindowsDoNotMatch() {
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: "FinderWindow", bundleID: "com.apple.finder",
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+    }
+
+    func testARuleIsScopedToItsApp() {
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: "Progress", bundleID: "com.example.App",
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+    }
+
+    func testMissingIdentifierNeverMatches() {
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: nil, bundleID: "com.apple.finder",
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: "Progress", bundleID: nil,
+            buttonCount: 3, promptRules: finderPrompt
+        ))
+    }
+
+    func testNoRulesMatchNothing() {
+        XCTAssertFalse(windowAwaitsAnswer(
+            identifier: "Progress", bundleID: "com.apple.finder",
+            buttonCount: 3, promptRules: []
+        ))
+    }
+}
+
 final class WindowPolicyTests: XCTestCase {
     private let outlook = "com.microsoft.Outlook"
 
@@ -133,7 +218,7 @@ final class WindowPolicyTests: XCTestCase {
     /// of Outlook in front of your work.
     func testOutlooksReminderPanelIsRejectedByTitle() {
         let policy = WindowPolicy(
-            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ Reminders?$")!]
+            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ (Reminders?|rappels?)$")!]
         )
         XCTAssertNotEqual(
             evaluate(candidate(title: "1 Reminder", bundleID: outlook), policy: policy), .accept
@@ -145,7 +230,7 @@ final class WindowPolicyTests: XCTestCase {
 
     func testAnEmailAboutRemindersStaysFocusable() {
         let policy = WindowPolicy(
-            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ Reminders?$")!]
+            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ (Reminders?|rappels?)$")!]
         )
         for title in ["Reminder: standup", "RE: Reminder to file expenses", "Calendar"] {
             XCTAssertEqual(
@@ -157,7 +242,7 @@ final class WindowPolicyTests: XCTestCase {
 
     func testATitleRuleDoesNotLeakToOtherApps() {
         let policy = WindowPolicy(
-            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ Reminders?$")!]
+            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ (Reminders?|rappels?)$")!]
         )
         XCTAssertEqual(
             evaluate(candidate(title: "1 Reminder", bundleID: "com.apple.Reminders"), policy: policy),
@@ -167,7 +252,7 @@ final class WindowPolicyTests: XCTestCase {
 
     func testAnUnreadableTitleCannotBypassARuleItWouldNotHaveMatched() {
         let policy = WindowPolicy(
-            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ Reminders?$")!]
+            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ (Reminders?|rappels?)$")!]
         )
         XCTAssertEqual(evaluate(candidate(title: nil, bundleID: outlook), policy: policy), .accept)
     }

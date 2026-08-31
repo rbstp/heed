@@ -57,8 +57,10 @@ jobs:
             latest="$(git tag --list 'v*' --sort=-v:refname | head -1)"
             IFS=. read -r major minor patch <<< "${latest:-v0.0.0}"
             major="${major#v}"
-            # feat in the PR title takes the minor; everything else is a patch.
-            if printf '%s' "$TITLE" | grep -qiE '\bfeat'; then
+            # A title that begins with feat (feat:, feat(scope):, feat!:) takes the minor;
+            # everything else is a patch. Anchored, so a title that merely mentions a feature
+            # does not bump the minor.
+            if printf '%s' "$TITLE" | grep -qiE '^feat[(!:]'; then
               minor=$((minor + 1)); patch=0
             else
               patch=$((patch + 1))

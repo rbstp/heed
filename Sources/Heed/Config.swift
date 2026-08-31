@@ -15,6 +15,9 @@ struct Config {
     var ignoreWhenCommandHeld = true
     var menuGuard = true
     var requireStandardWindow = true
+    var promptGuard = true
+    /// Prompts that hold focus; see PromptRule in FFMCore, where the matching is tested.
+    var promptRules: [PromptRule] = []
     var excludedWindowTitles: [String] = []
     /// Compiled title rules. See `TitleRule` in FFMCore, where the matching is tested.
     var titleExclusions: [TitleRule] = []
@@ -65,17 +68,28 @@ struct Config {
     /// fixed-size windows lack it too (Calculator, for one). So a targeted title rule it is.
     ///
     /// Anchored on the exact titles Outlook uses ("1 Reminder", "3 Reminders"), so an email whose
-    /// subject merely contains the word is unaffected.
+    /// subject merely contains the word is unaffected. The title follows the app's locale, so the
+    /// rule covers the locales seen so far -- English and French ("1 rappel") -- and any other
+    /// locale needs an `excludedWindowTitles` entry until it is added here.
     static let builtinTitleExclusions: [(bundleID: String?, pattern: String)] = [
-        ("com.microsoft.Outlook", "^[0-9]+ Reminders?$"),
+        ("com.microsoft.Outlook", "^[0-9]+ (Reminders?|rappels?)$"),
     ]
-    /// The `dev.rboisvert.focus-macos` defaults domain, however this process was started.
+    /// The `io.github.rbstp.heed` defaults domain, however this process was started.
     ///
     /// Installed in the app bundle, the main bundle identifier already *is* that domain, so
     /// `.standard` reads it. A suite name must not be used there: Foundation rejects using your own
     /// bundle identifier as a suite ("does not make sense and will not work") and silently reads
     /// nothing. Run as a bare binary instead -- `make probe`, or straight out of `.build` -- there is
     /// no main bundle identifier to go on, and the suite is what finds the same domain.
+    /// Windows that pass every structural check yet are prompts awaiting an answer, keyed on the
+    /// accessibility identifier their developer set. Finder's file-operation window is the
+    /// motivating case: its replace/skip/stop question reports subrole AXStandardWindow, so
+    /// nothing structural marks it, and its title ("Copy") changes with the locale while the
+    /// identifier does not.
+    static let builtinPromptRules: [PromptRule] = [
+        PromptRule(bundleID: "com.apple.finder", identifier: "Progress"),
+    ]
+
     static func store() -> UserDefaults {
         if Bundle.main.bundleIdentifier == bundleID {
             return .standard
@@ -86,6 +100,7 @@ struct Config {
     static func load() -> Config {
         var config = Config()
         config.excludedBundleIDs = builtinExclusions
+        config.promptRules = builtinPromptRules
 
         let defaults = store()
 
@@ -116,6 +131,7 @@ struct Config {
         config.ignoreWhenCommandHeld = bool("ignoreWhenCommandHeld", config.ignoreWhenCommandHeld)
         config.menuGuard = bool("menuGuard", config.menuGuard)
         config.requireStandardWindow = bool("requireStandardWindow", config.requireStandardWindow)
+        config.promptGuard = bool("promptGuard", config.promptGuard)
         if let titles = defaults.stringArray(forKey: "excludedWindowTitles") {
             config.excludedWindowTitles = titles
         }

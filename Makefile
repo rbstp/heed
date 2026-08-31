@@ -9,7 +9,13 @@
 BUNDLE_ID   := io.github.rbstp.heed
 CERT_NAME   := Heed Local Signing
 APP_NAME    := Heed
-VERSION     := 0.1.0
+# The latest release tag, so a source build stamps the version it derives from rather than a
+# constant that goes stale; the release workflow overrides it on the command line. 0.0.0 when no
+# tag is reachable (a fresh shallow clone, as in CI).
+VERSION     := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+ifeq ($(VERSION),)
+VERSION     := 0.0.0
+endif
 
 INSTALL_DIR := $(HOME)/Applications
 APP         := $(INSTALL_DIR)/$(APP_NAME).app
@@ -22,10 +28,17 @@ DOMAIN      := gui/$(shell id -u)
 # Matching a name is ambiguous once two identities share one, and the previous version collapsed any
 # failure -- locked keychain, missing tool, ambiguous match -- into ad-hoc signing, which silently
 # recreated the permission loss the certificate exists to prevent. Signing now refuses rather than
-# quietly degrading; ADHOC=1 asks for ad-hoc on purpose.
+# quietly degrading; ADHOC=1 forces ad-hoc on purpose -- even when the certificate exists, so a
+# local check-package or dist exercises exactly what CI ships.
 SIGN_ID     := $(shell security find-identity -v -p codesigning 2>/dev/null \
                  | grep -F '"$(CERT_NAME)"' | head -1 | awk '{print $$2}')
+ifeq ($(ADHOC),1)
+CODESIGN_ID := -
+SIGNED_BY   := ad-hoc
+else
 CODESIGN_ID := $(if $(SIGN_ID),$(SIGN_ID),-)
+SIGNED_BY   := $(if $(SIGN_ID),$(CERT_NAME),ad-hoc)
+endif
 
 # The generated plists are built with sed, which cannot be trusted with these characters. Refuse
 # rather than emit a corrupt plist that fails in some confusing way later.
@@ -90,7 +103,7 @@ bundle: build $(ICNS)
 	    -e 's|@VERSION@|$(VERSION)|g' \
 	    Resources/Info.plist > "$(APP)/Contents/Info.plist"
 	codesign --force --sign "$(CODESIGN_ID)" --identifier "$(BUNDLE_ID)" "$(APP)"
-	@echo "built $(APP), signed by $(if $(SIGN_ID),$(CERT_NAME),ad-hoc)"
+	@echo "built $(APP), signed by $(SIGNED_BY)"
 
 # install-agent runs from the recipe rather than as a second prerequisite: as prerequisites they are
 # independent, so `make -j install` could bootstrap the agent before the bundle existed.
@@ -129,8 +142,12 @@ logs-clear:
 	@: > "$(LOG)"; echo "cleared $(LOG)"
 
 ## What does the agent see under the pointer right now? Runs standalone; does not touch the agent.
+## An explicit screen point: make probe X=960 Y=540
 probe: build
-	@"$(BUILT)" --probe
+	@if [ -n "$(X)$(Y)" ] && { [ -z "$(X)" ] || [ -z "$(Y)" ]; }; then \
+		echo "usage: make probe [X=<x> Y=<y>]"; exit 1; \
+	fi
+	@"$(BUILT)" --probe $(X) $(Y)
 
 ## Create a self-signed code-signing identity so the Accessibility grant survives rebuilds.
 ##
@@ -182,8 +199,12 @@ check-package:
 	plutil -lint "$(STAGE)/agent.plist"
 	@test -s "$(STAGE)/$(APP_NAME).app/Contents/Resources/$(APP_NAME).icns" \
 		|| { echo "the bundle has no icon"; exit 1; }
-	@"$(STAGE)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)" --probe >/dev/null 2>&1 \
-		|| echo "note: --probe exited non-zero, expected without an Accessibility grant"
+	@rc=0; "$(STAGE)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)" --probe >/dev/null 2>&1 || rc=$$?; \
+	if [ $$rc -ge 126 ]; then \
+		echo "--probe crashed rather than ran (exit $$rc)"; exit 1; \
+	elif [ $$rc -ne 0 ]; then \
+		echo "note: --probe exited $$rc, expected without an Accessibility grant"; \
+	fi
 	@echo "package checks passed"
 
 ## Build the release archive the Homebrew cask downloads, and print its checksum.

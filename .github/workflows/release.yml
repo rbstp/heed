@@ -1,0 +1,112 @@
+name: release
+
+on:
+  push:
+    tags:
+      - v*
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a release in flight: a half-published tag is worse than a queued one.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+
+    permissions:
+      contents: write
+
+    outputs:
+      version: ${{ steps.dist.outputs.version }}
+      sha256: ${{ steps.dist.outputs.sha256 }}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: report toolchain
+        run: swift --version
+
+      - name: test
+        run: swift test
+
+      - name: build the release archive
+        id: dist
+        run: |
+          version="${TAG#v}"
+          # ADHOC=1 on purpose: there is no Developer ID, and `make bundle` refuses to guess.
+          make dist ADHOC=1 VERSION="$version"
+          zip=".build/dist/Heed-$version.zip"
+          {
+            echo "version=$version"
+            echo "sha256=$(shasum -a 256 "$zip" | cut -d ' ' -f 1)"
+            echo "zip=$zip"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ github.ref_name }}
+
+      - name: publish the release
+        run: gh release create "$TAG" --verify-tag --generate-notes "$ZIP"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          ZIP: ${{ steps.dist.outputs.zip }}
+
+  cask:
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Nothing here touches this repo: the bump lands in the tap, under its own token.
+    permissions: {}
+
+    steps:
+      - name: check for the tap token
+        run: |
+          [ -n "$TAP_TOKEN" ] || {
+            echo "TAP_TOKEN is unset. Add a fine-grained PAT with Contents: write on"
+            echo "rbstp/homebrew-tap as a repository secret, or the checkout below just 404s."
+            exit 1
+          }
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+
+      - name: checkout the tap
+        uses: actions/checkout@v7
+        with:
+          repository: rbstp/homebrew-tap
+          token: ${{ secrets.TAP_TOKEN }}
+
+      - name: point the cask at the new release
+        run: |
+          sed -i \
+            -e "s|^  version \".*\"|  version \"$VERSION\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"$SHA256\"|" \
+            Casks/heed.rb
+          # A sed matching nothing exits 0 and leaves the cask on the previous release, which then
+          # installs the wrong version silently. Prove both lines are actually there now.
+          for expected in "  version \"$VERSION\"" "  sha256 \"$SHA256\""; do
+            grep -qxF "$expected" Casks/heed.rb || {
+              echo "Casks/heed.rb has no line matching: $expected"
+              exit 1
+            }
+          done
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+
+      - name: commit
+        run: |
+          if git diff --quiet Casks/heed.rb; then
+            echo "the tap already points at $VERSION"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "heed $VERSION" Casks/heed.rb
+          git push
+        env:
+          VERSION: ${{ needs.build.outputs.version }}

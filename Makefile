@@ -39,8 +39,10 @@ BUILT       := .build/release/$(APP_NAME)
 ICON_SRC    := Tools/make-icon.swift
 ICNS        := .build/$(APP_NAME).icns
 STAGE       := .build/stage
+DIST        := .build/dist
+ZIP         := $(DIST)/$(APP_NAME)-$(VERSION).zip
 
-.PHONY: all build test bundle install install-agent uninstall restart logs logs-clear probe \
+.PHONY: all build test bundle dist install install-agent uninstall restart logs logs-clear probe \
         icon cert check-package reset-permission requirement clean
 
 all: build
@@ -82,6 +84,7 @@ bundle: build $(ICNS)
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	cp "$(BUILT)" "$(EXECUTABLE)"
 	cp "$(ICNS)" "$(APP)/Contents/Resources/$(APP_NAME).icns"
+	cp LaunchAgent/agent.plist.in "$(APP)/Contents/Resources/agent.plist.in"
 	sed -e 's|@BUNDLE_ID@|$(BUNDLE_ID)|g' \
 	    -e 's|@APP_NAME@|$(APP_NAME)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \
@@ -175,13 +178,26 @@ check-package:
 	@sed -e 's|@BUNDLE_ID@|$(BUNDLE_ID)|g' \
 	     -e 's|@EXECUTABLE@|$(STAGE)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)|g' \
 	     -e 's|@LOG@|$(STAGE)/heed.log|g' \
-	     LaunchAgent/agent.plist.in > "$(STAGE)/agent.plist"
+	     "$(STAGE)/$(APP_NAME).app/Contents/Resources/agent.plist.in" > "$(STAGE)/agent.plist"
 	plutil -lint "$(STAGE)/agent.plist"
 	@test -s "$(STAGE)/$(APP_NAME).app/Contents/Resources/$(APP_NAME).icns" \
 		|| { echo "the bundle has no icon"; exit 1; }
 	@"$(STAGE)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)" --probe >/dev/null 2>&1 \
 		|| echo "note: --probe exited non-zero, expected without an Accessibility grant"
 	@echo "package checks passed"
+
+## Build the release archive the Homebrew cask downloads, and print its checksum.
+##
+## ditto rather than zip: it preserves the bundle's symlinks and its code signature, which `zip -r`
+## is free to mangle -- and a mangled signature only shows up as a TCC failure on someone else's
+## machine. Staged like check-package, so releasing never touches the installed app.
+dist:
+	@rm -rf "$(STAGE)" "$(DIST)"
+	@$(MAKE) --no-print-directory bundle INSTALL_DIR="$(STAGE)"
+	codesign --verify --deep --strict "$(STAGE)/$(APP_NAME).app"
+	@mkdir -p "$(DIST)"
+	ditto -c -k --keepParent --sequesterRsrc "$(STAGE)/$(APP_NAME).app" "$(ZIP)"
+	@shasum -a 256 "$(ZIP)"
 
 ## Clear the stale Accessibility grant after a rebuild, so macOS prompts again.
 reset-permission:

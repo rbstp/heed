@@ -23,7 +23,9 @@ brew install --cask rbstp/tap/heed
 
 That installs `Heed.app`, loads the login agent, and strips the quarantine attribute — released
 builds are ad-hoc signed, so Gatekeeper would otherwise refuse them outright. The cost of ad-hoc is
-that `brew upgrade` invalidates the Accessibility grant; see *Signing* below.
+that every upgrade invalidates the Accessibility grant, so expect to grant it again after one. The
+cask clears the dead entry as it installs, which is what lets Heed ask you rather than going quiet;
+see *Signing* below.
 
 ### From source
 
@@ -117,9 +119,14 @@ of the binary:
 designated => cdhash H"469f06f184bd6d10061d03a099aa144ff37937dc"
 ```
 
-Every build is then a different identity as far as TCC is concerned, so **upgrading silently
-invalidates the grant** while the checkbox in System Settings still appears ticked. That is the
-single most confusing failure mode here. If Heed goes quiet right after an upgrade:
+Every build is then a different identity as far as TCC is concerned, so **upgrading invalidates the
+grant**. The dead record left behind is worse than no record at all: macOS suppresses the permission
+prompt while any record for the bundle ID exists, so the agent waits forever while the checkbox in
+System Settings still appears ticked. That was the single most confusing failure mode here.
+
+The Homebrew cask now clears that record in its `postflight`, before it loads the agent, so an
+upgrade asks you for the permission again instead of going quiet. From a source build,
+`make reset-permission` does the same by hand. Uninstalling leaves the entry listed either way:
 
 ```sh
 tccutil reset Accessibility io.github.rbstp.heed     # then grant it again

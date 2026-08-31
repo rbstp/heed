@@ -3,12 +3,13 @@
 Focus follows mouse for macOS, in the spirit of Hyprland's `follow_mouse`. A small background agent
 that moves keyboard focus to the window under the pointer, so you stop clicking to type.
 
-Installs as `Heed.app` (a background agent -- no Dock icon, no window). The repo, and the defaults
-domain, stay `focus-macos` / `io.github.rbstp.heed`.
+Installs as `Heed.app` -- a background agent, no Dock icon and no window of its own.
 
-Built and verified on macOS 27.0 (arm64, Swift 6.4). Requires macOS 14+.
+Built and verified on macOS 27.0 (arm64, Swift 6.4); CI builds and tests on `macos-latest`.
+Requires macOS 14+.
 
 ```sh
+make cert        # once per machine, so permission survives rebuilds -- see Signing below
 make install     # build, sign, install to ~/Applications, load the login agent
 make logs        # watch what it decides
 make uninstall
@@ -88,29 +89,62 @@ result
 `make logs` with `verbose true` shows the running decisions, including which fallback rung each app
 responded to and why a window was skipped.
 
-## Permissions, and the rebuild gotcha
+## Signing, and why it decides whether you keep re-granting
 
-There is no code-signing identity on the machine this was built for, so the app is **ad-hoc signed**.
-An ad-hoc signature's designated requirement is a bare hash of the binary:
+Accessibility grants are keyed to the app's *designated requirement*, so how the app is signed
+decides whether a rebuild keeps the grant. `make requirement` reports which mode you are in and what
+it means.
+
+**Recommended, once per machine:**
+
+```sh
+make cert       # create a self-signed code-signing identity
+make install    # then grant Accessibility when macOS asks
+```
+
+`make cert` creates an identity called `Heed Local Signing`, scoped to code signing only and trusted
+in your login keychain rather than system-wide, so it cannot vouch for anything else. `make bundle`
+picks it up automatically when present. The requirement then names the certificate, which does not
+change:
 
 ```
 $ make requirement
-designated => cdhash H"469f06f184bd6d10061d03a099aa144ff37937dc"
+designated => identifier "io.github.rbstp.heed" and certificate leaf = H"28d1366140a85b670c777c19..."
+-> identity-based: the grant should survive rebuilds
 ```
 
-Every rebuild produces a different hash, which is a different identity as far as TCC is concerned.
-**So rebuilding silently invalidates the Accessibility grant** — while the checkbox in System
-Settings still appears ticked. If the agent stops working right after a rebuild, that is why:
+Two things to expect:
+
+- The first time `codesign` uses the key, macOS asks for keychain access. Choose **Always Allow**, or
+  it asks again on every build.
+- Switching from ad-hoc to certificate signing changes the app's identity, so you grant Accessibility
+  one more time after `make cert`. After that it sticks.
+
+To remove the identity later:
+
+```sh
+security delete-identity -c "Heed Local Signing" ~/Library/Keychains/login.keychain-db
+```
+
+### Without a certificate
+
+Signing falls back to **ad-hoc**, whose designated requirement is a bare hash of the binary:
+
+```
+designated => cdhash H"469f06f184bd6d10061d03a099aa144ff37937dc"
+-> hash-based: every rebuild is a new identity ...
+```
+
+Every rebuild is then a different identity as far as TCC is concerned, so **rebuilding silently
+invalidates the Accessibility grant** — while the checkbox in System Settings still appears ticked.
+That is the single most confusing failure mode here. If the agent goes quiet right after a rebuild:
 
 ```sh
 make reset-permission     # clears the stale grant so macOS asks again
 ```
 
-To avoid re-granting on every rebuild, create a self-signed code-signing certificate in your login
-keychain (Keychain Access > Certificate Assistant > Create a Certificate, type *Code Signing*) and
-sign with `--sign <name>` instead of `--sign -`. That gives an identity-based requirement rather than
-a hash-based one. Confirm it actually worked with `make requirement` before and after a rebuild
-rather than assuming — the whole point is that the requirement stops mentioning `cdhash`.
+Either way, trust `make requirement` over this document: the difference that matters is whether the
+requirement mentions `cdhash` or a certificate.
 
 ## Transient windows
 
@@ -212,7 +246,7 @@ already focused. Live system state is the only authority.
   few Java toolkits — fall back to app-level activation; per-window precision is not reachable for
   them without private API.
 - Stage Manager manages its own window layering and may fight this.
-- Rebuilding invalidates the ad-hoc Accessibility grant (above).
+- Without `make cert`, rebuilding invalidates the Accessibility grant (see *Signing* above).
 
 ## Prior art
 

@@ -10,6 +10,9 @@ final class MenuBarController: NSObject {
     private let item: NSStatusItem
     private let onClick: () -> Void
     private var state = MenuBarState(enabled: true, trusted: true)
+    /// The registered hotkey, shown beside the toggle so the menu is where you find out it exists.
+    /// Nil when none is registered.
+    var shortcut: HotkeySpec?
 
     init(onClick: @escaping () -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
@@ -84,6 +87,13 @@ final class MenuBarController: NSObject {
         let toggle = NSMenuItem(title: state.toggleTitle, action: #selector(toggleFromMenu),
                                 keyEquivalent: "")
         toggle.target = self
+        // Only for a key AppKit can render from a single character. An F-key or an arrow needs the
+        // NSxxxFunctionKey constants, and a menu is not worth a second key table -- the log and the
+        // README name the combination in every case.
+        if let shortcut, shortcut.key.count == 1 {
+            toggle.keyEquivalent = shortcut.key
+            toggle.keyEquivalentModifierMask = MenuBarController.modifierMask(shortcut)
+        }
         menu.addItem(toggle)
 
         let log = NSMenuItem(title: "Open Log", action: #selector(openLog), keyEquivalent: "")
@@ -91,6 +101,15 @@ final class MenuBarController: NSObject {
         menu.addItem(log)
 
         return menu
+    }
+
+    private static func modifierMask(_ spec: HotkeySpec) -> NSEvent.ModifierFlags {
+        var mask: NSEvent.ModifierFlags = []
+        if spec.modifiers.contains(.command) { mask.insert(.command) }
+        if spec.modifiers.contains(.control) { mask.insert(.control) }
+        if spec.modifiers.contains(.option) { mask.insert(.option) }
+        if spec.modifiers.contains(.shift) { mask.insert(.shift) }
+        return mask
     }
 
     @objc private func toggleFromMenu() {

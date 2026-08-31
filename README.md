@@ -43,7 +43,7 @@ Either way, macOS asks for Accessibility permission on first run — grant it un
 Privacy & Security > Accessibility**. The agent notices within a couple of seconds; there is nothing
 to restart.
 
-## Menu bar
+## Turning it on and off
 
 A cube in the menu bar says whether focus is following the pointer. Click it to turn Heed off, click
 again to turn it back on. The icon is dimmed while it is off, and dimmed too while the Accessibility
@@ -63,7 +63,24 @@ a Quit item would be theatre. The switch is the off button; to actually stop the
 launchctl bootout gui/$(id -u)/io.github.rbstp.heed
 ```
 
-To keep the menu bar as it was, with `defaults write enabled` as the only switch:
+**⌃⌘H toggles it from anywhere**, which the icon cannot: reaching the menu bar means dragging the
+pointer across other windows, and with focus following the pointer, that moves focus on the way to
+the switch. The combination is registered with Carbon rather than watched for, so pressing it is
+consumed instead of also landing in whatever you were typing, and it needs no Accessibility grant —
+it works while Heed is still waiting for one, which is when you are most likely to want it. If
+another app already owns the combination, the log says so and none is registered.
+
+```sh
+defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f'   # or '' for none
+make restart
+```
+
+Modifier names are forgiving (`cmd`, `command`, `⌘`, and `+`, `-` or a space between), and at least
+one modifier is required — a bare key would be swallowed system-wide, starting with your ability to
+type it. A combination that cannot be parsed is refused with a log line rather than quietly
+registering some other key; `Tests/FFMCoreTests/HotkeySpecTests.swift` covers that.
+
+To keep the menu bar as it was, with the hotkey and `defaults write enabled` as the switches:
 
 ```sh
 defaults write io.github.rbstp.heed menuBarIcon -bool false
@@ -78,7 +95,8 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Master switch. Clicking the menu bar icon writes this key; off, no polling timer runs at all. |
-| `menuBarIcon` | `true` | Show the cube in the menu bar. See *Menu bar* above. |
+| `menuBarIcon` | `true` | Show the cube in the menu bar. See *Turning it on and off* above. |
+| `hotkey` | `cmd+ctrl+h` | Global combination that toggles Heed. Empty string disables it. |
 | `dwellMs` | `0` | How long the pointer must rest on a window before focus follows. `0` is instant. Raise it to ~200 if sweeping the pointer across windows churns focus more than you like. |
 | `pollMs` | `40` | Cursor sampling interval. |
 | `raise` | `true` | Also raise the window. See *Focus and raise* below. |

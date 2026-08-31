@@ -14,9 +14,12 @@ final class Agent {
     private var machine: DwellMachine<Target>
     private var timer: DispatchSourceTimer?
 
-    /// The menu bar item, and the one piece of state here that belongs to the main thread rather
-    /// than to `queue`. `syncMenuBar` is the hop between the two.
+    /// The menu bar item, the hotkey, and the combination the menu shows for it: the state here
+    /// that belongs to the main thread rather than to `queue`. `syncMenuBar` and `syncHotkey` are
+    /// the hops between the two.
     private var menuBar: MenuBarController?
+    private var hotkey: Hotkey?
+    private var shortcut: HotkeySpec?
 
     private var lastCursor = CGPoint(x: CGFloat.infinity, y: CGFloat.infinity)
     private var pendingInvalidation = false
@@ -129,6 +132,7 @@ final class Agent {
             forgetTarget()
             if isRunning { scheduleTimer() }   // pollMs may have changed
             syncMenuBar()
+            syncHotkey()
             Log.note("reloaded config: dwell=\(config.dwellMs)ms poll=\(config.pollMs)ms "
                 + "raise=\(config.raise) enabled=\(config.enabled)")
         }
@@ -136,13 +140,17 @@ final class Agent {
 
     // MARK: - Menu bar
 
-    /// Installed from the launch path rather than from `start()`, so the icon is there whether or
-    /// not the Accessibility grant has arrived.
+    /// Installed from the launch path rather than from `start()`, so both are there whether or not
+    /// the Accessibility grant has arrived. The hotkey especially: waiting for a permission you have
+    /// not decided to give yet is exactly when you want to be able to switch this off.
     func installMenuBar() {
-        queue.async { [self] in syncMenuBar() }
+        queue.async { [self] in
+            syncMenuBar()
+            syncHotkey()
+        }
     }
 
-    /// The click handler, and the only thing that changes `enabled` at runtime.
+    /// The click and hotkey handler, and the only thing that changes `enabled` at runtime.
     ///
     /// It writes the same defaults key `defaults write` does, so the choice survives a restart and
     /// the icon and the configuration cannot come to disagree.
@@ -156,7 +164,7 @@ final class Agent {
             forgetTarget()
             if isRunning { scheduleTimer() }
 
-            Log.note(value ? "enabled from the menu bar" : "disabled from the menu bar")
+            Log.note(value ? "enabled" : "disabled")
             syncMenuBar()
         }
     }
@@ -175,9 +183,41 @@ final class Agent {
             if menuBar == nil {
                 menuBar = MenuBarController { [weak self] in self?.toggleEnabled() }
             }
+            // Set here as well as in syncHotkey, because either can run first.
+            menuBar?.shortcut = shortcut
             // Trust is read here rather than carried across the hop: it can change at any moment,
             // and it is what decides whether the icon claims to be working.
             menuBar?.render(enabled: enabled, trusted: accessibilityTrusted(prompt: false))
+        }
+    }
+
+    /// Registers the toggle hotkey, replacing any previous one. Called on `queue`; Carbon
+    /// registration belongs to the main thread, so the value is read here and applied there.
+    private func syncHotkey() {
+        let text = config.hotkey
+        DispatchQueue.main.async { [self] in
+            // Dropping the old one unregisters it, which is also how a changed combination takes
+            // effect: there is no editing a registration in place.
+            hotkey = nil
+            shortcut = nil
+            menuBar?.shortcut = nil
+
+            let wanted = text.trimmingCharacters(in: .whitespaces)
+            guard !wanted.isEmpty, wanted.lowercased() != "none" else { return }
+            guard let spec = HotkeySpec(wanted) else {
+                Log.note("hotkey \"\(wanted)\" is not a combination I understand "
+                    + "(try cmd+ctrl+h); none registered")
+                return
+            }
+            guard let registered = Hotkey(spec: spec, action: { [weak self] in
+                self?.toggleEnabled()
+            }) else {
+                return   // Hotkey logs why
+            }
+            hotkey = registered
+            shortcut = spec
+            menuBar?.shortcut = spec
+            Log.note("hotkey \(spec.display) toggles Heed")
         }
     }
 

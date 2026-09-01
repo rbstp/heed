@@ -55,9 +55,18 @@ the icon and the configuration cannot come to disagree. Off, the polling timer i
 than left waking 25 times a second to return immediately.
 
 Right-click, or control-click, for a short menu: the running version, the same switch as a menu
-item, and *Open Log*. There is deliberately no *Quit* — the login agent restarts whatever exits, so
-a Quit item would be theatre. The switch is the off button; to actually stop the agent, either
-`brew uninstall --cask heed` or:
+item, *Open Log*, and *Quit Heed*.
+
+*Quit Heed* unloads the login agent rather than merely exiting, because the agent sets KeepAlive —
+launchd replaces a process that exits within a second, so a Quit item that only exited would be
+theatre, the icon back before the menu had finished closing. Unloading the job stops both at once.
+The plist stays in `~/Library/LaunchAgents`, so Heed is back at your next login, and
+`make install-agent` brings it back sooner. Which of the two quitting does is decided by
+`XPC_SERVICE_NAME`: a copy you started yourself simply exits, and leaves the installed agent alone.
+
+The switch, not *Quit*, is the off button for focus following — quitting gives up the hotkey and the
+icon with it. To remove Heed altogether: `brew uninstall --cask heed`, or `make uninstall`. The
+unload the menu item runs, by hand:
 
 ```sh
 launchctl bootout gui/$(id -u)/io.github.rbstp.heed

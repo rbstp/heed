@@ -18,6 +18,8 @@ struct Config {
     var entryMotionPx = 6
     var ignoreWhenCommandHeld = true
     var menuGuard = true
+    var handoverGuard = true
+    var handoverSettleMs = 300
     var requireStandardWindow = true
     var promptGuard = true
     /// Prompts that hold focus; see PromptRule in FFMCore, where the matching is tested.
@@ -44,6 +46,7 @@ struct Config {
     var idlePoll: Double { max(Double(idlePollMs) / 1000, poll) }
     var typingCooldown: Double { Double(typingCooldownMs) / 1000 }
     var clickGrace: Double { Double(clickGraceMs) / 1000 }
+    var handoverSettle: Double { Double(handoverSettleMs) / 1000 }
     var verifyTimeout: Double { Double(verifyTimeoutMs) / 1000 }
 
     /// Apps that must never receive focus from the pointer.
@@ -140,6 +143,8 @@ struct Config {
         config.clickGraceMs = int("clickGraceMs", config.clickGraceMs, 0...2_000)
         config.verifyTimeoutMs = int("verifyTimeoutMs", config.verifyTimeoutMs, 20...2_000)
         config.entryMotionPx = int("entryMotionPx", config.entryMotionPx, 0...200)
+        config.handoverGuard = bool("handoverGuard", config.handoverGuard)
+        config.handoverSettleMs = int("handoverSettleMs", config.handoverSettleMs, 0...5_000)
         config.ignoreWhenCommandHeld = bool("ignoreWhenCommandHeld", config.ignoreWhenCommandHeld)
         config.menuGuard = bool("menuGuard", config.menuGuard)
         config.requireStandardWindow = bool("requireStandardWindow", config.requireStandardWindow)

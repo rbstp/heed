@@ -118,6 +118,8 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 | `verifyTimeoutMs` | `100` | How long to wait for focus to land before giving up on this attempt. Spent with the agent blocked, so it is deliberately tight — the mechanism that works confirms in roughly 25 ms, and a failure just retries on the next tick. |
 | `ignoreWhenCommandHeld` | `true` | Ignore the pointer while ⌘ is down, so Cmd-Tab is not fought. |
 | `menuGuard` | `true` | Ignore the pointer while a menu, popover or drag image is on screen. |
+| `handoverGuard` | `true` | Focus that arrived without the pointer — a new window, a window raised by a shortcut, ⌘-Tab — stays where it is until the pointer settles on a different window. See *Focus that arrived without the pointer* below. |
+| `handoverSettleMs` | `300` | How long the pointer must be **at rest** on another window to overrule that. Charged only while focus is being held, so ordinary pointer focus stays instant. `0` gives the hold up the moment the pointer stops anywhere else. |
 | `requireStandardWindow` | `true` | Only focus ordinary windows (`AXStandardWindow`). Keeps transient pop-ups from dragging their app forward — see *Transient windows* below. |
 | `promptGuard` | `true` | While a prompt awaits an answer in the frontmost app — Finder asking whether to replace the file you just dropped — the pointer moves no focus at all, so the prompt cannot be buried mid-question. Lifts the moment the question is answered. |
 | `excludedWindowTitles` | `[]` | Case-insensitive **regular expressions**; a window whose title matches any of them is never focused. Applies to every app, and adds to the built-in rules below. |
@@ -285,6 +287,59 @@ One thing this cannot fix: **clicking** a button in a background app's window ac
 That is macOS, not Heed. Dismissing an Outlook reminder brings Outlook forward for exactly that
 reason.
 
+## Focus that arrived without the pointer
+
+The mirror image of that, and the case it cannot see. Press ⌘N with the pointer parked over the
+window you were reading: the new window opens somewhere else and takes focus, and half a second
+later — as soon as the typing cooldown lapses — the parked pointer takes it straight back, so the
+first line of the new note lands in the window you were reading. Nothing arrived under the pointer,
+so there is nothing for `entryMotionPx` to reject. What changed is that focus was handed somewhere
+else, deliberately, and a pointer that has not moved since has said nothing at all.
+
+The signal is Heed's own question, asked once a tick while the pointer is parked: **does the window
+under the pointer hold focus?** When that stops being true without the pointer moving, something
+other than the pointer moved focus — nothing else can have, because the pointer is the only thing
+Heed moves focus for. That covers a window opening, a window raised from behind others by a
+shortcut, ⌘-Tab and an app launching, without having to tell them apart, and it needs no window
+list: watching which window is frontmost in the window server cannot see a focus change that
+reorders nothing, cannot see key panels above the ordinary window level, and cannot be matched to an
+Accessibility element without the private call this program avoids. The same question also answers
+the other way the world moves on its own — a *different* window arriving under a still pointer,
+which is what a Space switch does to every window at once.
+
+Two things it deliberately does not read as a handover. Focus that was never on the window under the
+pointer has not just left it: that is Heed trying and failing to focus it, which has to stay
+retryable rather than becoming a hold against the very window being focused. And a pointer that
+moved explains the answer changing by itself, so nothing is read into it — which is also why the
+question costs almost nothing, since it is only asked when the pointer is parked and the loop is
+already down to its heartbeat.
+
+So focus that arrived without the pointer stays put. It ends when the pointer **comes to rest** on a
+different window, and both halves of that are load-bearing — each was learned by getting it wrong.
+
+Not *touching* another window. The window that just took focus is often on another display, and
+reaching it means crossing whatever lies in between; ending the hold at the first crossing takes the
+focus you were walking towards before you arrive. Worse, once focus moves, that app comes forward and
+buries the window you were walking to — which can then never be reached by pointer at all, because
+the hit test resolves whatever covers it.
+
+And not *having been over* another window for a while, either. One maximised window takes longer to
+cross than any settle worth having, so elapsed time cannot tell travelling from arriving. Only
+stopping can: `handoverSettleMs` measures rest, and the clock is thrown away the moment the pointer
+moves on. Stopping therefore hands focus over in about half a second — the settle, plus the fifth of
+a second of recent movement that has to decay first, plus `dwellMs` if you have set one.
+
+Movement *within* the window the pointer started on says nothing at all, which is the point: you can
+nudge the mouse while typing into what just opened. There is no timer either — nothing expires on its
+own, because focus sitting where you put it is not a state that needs correcting.
+
+Three things worth knowing. A window that takes focus *by itself* is held too, because nothing
+distinguishes it from one you asked for: a pop-up that steals focus keeps it until the pointer
+settles elsewhere, where before it would have lost focus to the parked pointer within the second.
+Apps with no usable Accessibility tree are resolved at app granularity, so their windows cannot be
+told apart; they earn no hold at all rather than one the pointer could not end by moving within the
+app. And `handoverGuard` turns the whole thing off.
+
 ## Focus and raise
 
 macOS does not separate them. Making an app frontmost brings its window forward, so Hyprland's
@@ -299,8 +354,9 @@ platform constraint, not a missing feature.
 2. When the pointer moved, hit-test with `AXUIElementCopyElementAtPosition`, which is z-order aware.
    This is what lets the whole thing stay on public API: identifying a window this way avoids having
    to map a `CGWindowID` onto an `AXUIElement`, which is what pushes yabai, AeroSpace and Amethyst
-   onto the private `_AXUIElementGetWindow`. Accessibility is the only permission needed — no Screen
-   Recording.
+   onto the private `_AXUIElementGetWindow`. Accessibility is the only permission this asks for, and
+   the only one it has ever been granted here — window *images* are what need Screen Recording, and
+   nothing here reads one.
 3. Resolve the window via `AXTopLevelUIElement`, then `AXWindow`, then the element itself. That order
    matters: `AXWindow` maps an element inside a sheet to the window that *owns* the sheet, which
    would hide the fact that the pointer is over a sheet.

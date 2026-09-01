@@ -1,4 +1,5 @@
 import AppKit
+import FFMCore
 
 /// The menu bar item: says whether focus is following the pointer, and toggles it when clicked.
 ///
@@ -8,6 +9,10 @@ import AppKit
 final class MenuBarController: NSObject {
     private let item: NSStatusItem
     private let onClick: () -> Void
+    private var state = MenuBarState(enabled: true, trusted: true)
+    /// The registered hotkey, shown beside the toggle so the menu is where you find out it exists.
+    /// Nil when none is registered.
+    var shortcut: HotkeySpec?
 
     init(onClick: @escaping () -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
@@ -20,6 +25,10 @@ final class MenuBarController: NSObject {
         button.imagePosition = .imageOnly
         button.target = self
         button.action = #selector(clicked)
+        // Right-click has to be asked for; a status item button sends its action on left mouse up
+        // only. Control-click arrives as an ordinary left click carrying the modifier, so both are
+        // sorted out in `clicked`.
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
     /// Removed explicitly rather than left to the item's own deallocation, which would give the
@@ -29,34 +38,99 @@ final class MenuBarController: NSObject {
         NSStatusBar.system.removeStatusItem(item)
     }
 
+    /// What to show is decided by `MenuBarState` in FFMCore, where it is tested; this only applies
+    /// the answer. AppKit's own disabled-control treatment does the dimming, so it matches every
+    /// other menu bar item and follows appearance changes rather than an alpha of our own.
     func render(enabled: Bool, trusted: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let button = item.button else { return }
 
-        // Dimmed whenever the pointer moves nothing, which includes waiting for the Accessibility
-        // grant -- an undimmed icon there would claim the agent was working when it cannot.
-        //
-        // AppKit's own disabled-control treatment rather than an alpha of our own, so it matches
-        // every other menu bar item and follows appearance changes.
-        button.appearsDisabled = !(enabled && trusted)
-
-        // The switch and the grant are separate facts and the icon can only show one of them, so
-        // the tooltip carries both -- but only while it is on. Off, nothing re-checks the grant,
-        // because that only happens on a tick and there are no ticks; naming it here would leave
-        // the tooltip claiming a missing permission for as long as the agent stayed off, long after
-        // it had been granted. Off explains the dimming on its own, and clicking on re-reads the
-        // grant before this runs again.
-        var help = enabled ? "Heed is on. Click to turn it off." : "Heed is off. Click to turn it on."
-        if enabled, !trusted {
-            help += " It also needs Accessibility permission, from"
-                + " System Settings > Privacy & Security > Accessibility."
-        }
-        button.toolTip = help
-        button.setAccessibilityLabel("Heed, \(enabled ? "on" : "off")")
+        state = MenuBarState(enabled: enabled, trusted: trusted)
+        button.appearsDisabled = state.dimmed
+        button.toolTip = state.tooltip
+        button.setAccessibilityLabel(state.label)
     }
 
     @objc private func clicked() {
+        let event = NSApp.currentEvent
+        let secondary = event?.type == .rightMouseUp
+            || event?.modifierFlags.contains(.control) == true
+        if secondary {
+            showMenu()
+        } else {
+            onClick()
+        }
+    }
+
+    /// The menu exists for what a one-button switch cannot say: which version is running, that the
+    /// icon is a switch at all, and where the log is.
+    ///
+    /// Assigned to the item and taken away again rather than left in place, because a status item
+    /// that owns a menu opens it on every click -- which would cost the left-click toggle. Handing
+    /// it over for the length of one click is what gets AppKit's own placement and highlighting
+    /// instead of a popover positioned by hand.
+    private func showMenu() {
+        guard let button = item.button else { return }
+        item.menu = menu()
+        button.performClick(nil)
+        item.menu = nil
+    }
+
+    private func menu() -> NSMenu {
+        let menu = NSMenu()
+
+        // No action, so AppKit's automatic enabling greys it out: a heading, not a command.
+        menu.addItem(NSMenuItem(title: "Heed \(MenuBarController.version)", action: nil,
+                                keyEquivalent: ""))
+        menu.addItem(.separator())
+
+        let toggle = NSMenuItem(title: state.toggleTitle, action: #selector(toggleFromMenu),
+                                keyEquivalent: "")
+        toggle.target = self
+        // Only for a key AppKit can render from a single character. An F-key or an arrow needs the
+        // NSxxxFunctionKey constants, and a menu is not worth a second key table -- the log and the
+        // README name the combination in every case.
+        if let shortcut, shortcut.key.count == 1 {
+            toggle.keyEquivalent = shortcut.key
+            toggle.keyEquivalentModifierMask = MenuBarController.modifierMask(shortcut)
+        }
+        menu.addItem(toggle)
+
+        let log = NSMenuItem(title: "Open Log", action: #selector(openLog), keyEquivalent: "")
+        log.target = self
+        menu.addItem(log)
+
+        return menu
+    }
+
+    private static func modifierMask(_ spec: HotkeySpec) -> NSEvent.ModifierFlags {
+        var mask: NSEvent.ModifierFlags = []
+        if spec.modifiers.contains(.command) { mask.insert(.command) }
+        if spec.modifiers.contains(.control) { mask.insert(.control) }
+        if spec.modifiers.contains(.option) { mask.insert(.option) }
+        if spec.modifiers.contains(.shift) { mask.insert(.shift) }
+        return mask
+    }
+
+    @objc private func toggleFromMenu() {
         onClick()
+    }
+
+    /// The agent's only output. Opens in whatever handles .log, which is Console by default.
+    @objc private func openLog() {
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Logs/heed.log")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            Log.note("no log at \(url.path) yet")
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// The bundle's version, or a marker when there is no bundle -- running straight out of
+    /// `.build`, where claiming a version would be a small lie.
+    private static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "(unpackaged)"
     }
 
     /// The app icon's cube, reduced to what survives at menu bar size: the hexagon silhouette and

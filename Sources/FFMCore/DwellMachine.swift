@@ -37,6 +37,15 @@ public struct DwellMachine<Target: Equatable> {
     /// while something is actually pending.
     public var hasCandidate: Bool { candidate != nil }
 
+    /// True while this machine can still produce a target without any new input: a dwell is
+    /// running, or a hit test has been armed and not yet spent.
+    ///
+    /// Exists so the caller can stop polling when it is false. Both halves matter: dropping to a
+    /// slow heartbeat mid-dwell would stretch the dwell to the heartbeat, and doing it with a
+    /// forced hit test outstanding would delay the re-test that a suppression or an invalidation
+    /// just armed -- which is exactly the tick that acquires the window you are already resting on.
+    public var needsTick: Bool { candidate != nil || forceHitTest }
+
     /// Advance one tick.
     ///
     /// - Parameters:

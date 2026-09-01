@@ -6,8 +6,11 @@ let bundleID = "io.github.rbstp.heed"
 struct Config {
     var enabled = true
     var menuBarIcon = true
+    /// Parsed by `HotkeySpec` in FFMCore, where the parsing is tested. Empty disables it.
+    var hotkey = "cmd+ctrl+h"
     var dwellMs = 0
     var pollMs = 40
+    var idlePollMs = 1_000
     var raise = true
     var typingCooldownMs = 500
     var clickGraceMs = 150
@@ -36,6 +39,9 @@ struct Config {
 
     var dwell: Double { Double(dwellMs) / 1000 }
     var poll: Double { Double(pollMs) / 1000 }
+    /// Never faster than `poll`: a "slow" heartbeat that outpaced the fast one would just be more
+    /// wakeups under another name.
+    var idlePoll: Double { max(Double(idlePollMs) / 1000, poll) }
     var typingCooldown: Double { Double(typingCooldownMs) / 1000 }
     var clickGrace: Double { Double(clickGraceMs) / 1000 }
     var verifyTimeout: Double { Double(verifyTimeoutMs) / 1000 }
@@ -123,8 +129,12 @@ struct Config {
 
         config.enabled = bool("enabled", config.enabled)
         config.menuBarIcon = bool("menuBarIcon", config.menuBarIcon)
+        if let hotkey = defaults.string(forKey: "hotkey") {
+            config.hotkey = hotkey
+        }
         config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
         config.pollMs = int("pollMs", config.pollMs, 10...1_000)
+        config.idlePollMs = int("idlePollMs", config.idlePollMs, 100...10_000)
         config.raise = bool("raise", config.raise)
         config.typingCooldownMs = int("typingCooldownMs", config.typingCooldownMs, 0...5_000)
         config.clickGraceMs = int("clickGraceMs", config.clickGraceMs, 0...2_000)

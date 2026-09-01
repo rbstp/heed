@@ -14,9 +14,22 @@ final class Agent {
     private var machine: DwellMachine<Target>
     private var timer: DispatchSourceTimer?
 
-    /// The menu bar item, and the one piece of state here that belongs to the main thread rather
-    /// than to `queue`. `syncMenuBar` is the hop between the two.
+    /// The menu bar item, the hotkey, and the combination the menu shows for it: the state here
+    /// that belongs to the main thread rather than to `queue`. `syncMenuBar` and `syncHotkey` are
+    /// the hops between the two.
     private var menuBar: MenuBarController?
+    private var hotkey: Hotkey?
+    private var shortcut: HotkeySpec?
+
+    /// What the timer is currently scheduled at, so retiming is a no-op when nothing changed, and
+    /// when the last tick ran, which is how an idling tick tells that it missed something.
+    private var interval: Double = 0
+    private var lastTickAt: Double = 0
+    /// Main thread only. Mirrors "the loop is idling, wake it", so a mouse event costs one bool test
+    /// rather than a dispatch hop -- and events arrive far faster than the loop ever ticked.
+    private var wantsMouseWake = false
+    private var mouseMonitor: Any?
+    private var observersInstalled = false
 
     private var lastCursor = CGPoint(x: CGFloat.infinity, y: CGFloat.infinity)
     private var pendingInvalidation = false
@@ -87,7 +100,10 @@ final class Agent {
     }
 
     fileprivate func noteDisplayReconfiguration() {
-        queue.async { self.pendingInvalidation = true }
+        queue.async {
+            self.pendingInvalidation = true
+            self.wakeLoop()
+        }
     }
 
     private func scheduleTimer() {
@@ -98,13 +114,45 @@ final class Agent {
         // Disabled means no timer rather than a tick that wakes 25 times a second to return
         // immediately. Everything that can flip `enabled` -- the menu bar, a config reload -- comes
         // back through here, so this is the only place that has to know.
-        guard config.enabled else { return }
+        guard config.enabled else {
+            interval = 0
+            setMouseWake(false)
+            return
+        }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + config.poll, repeating: config.poll, leeway: .milliseconds(10))
         timer.setEventHandler { [weak self] in self?.tick() }
         timer.resume()
         self.timer = timer
+        interval = 0
+        retime(to: config.poll, startingNow: false)
+    }
+
+    /// Re-aims the timer, and tells the main thread whether a mouse event should wake it.
+    ///
+    /// Idling gets generous leeway on purpose: it lets the system fire this alongside whatever else
+    /// it was going to wake for, which is most of where the saving comes from -- a timer nobody has
+    /// to wake the CPU for costs close to nothing.
+    private func retime(to wanted: Double, startingNow: Bool) {
+        guard let timer, wanted != interval else { return }
+        interval = wanted
+        let idling = wanted > config.poll
+        timer.schedule(
+            deadline: startingNow ? .now() : .now() + wanted,
+            repeating: wanted,
+            leeway: idling ? .milliseconds(Int(wanted * 500)) : .milliseconds(10)
+        )
+        setMouseWake(idling)
+    }
+
+    private func setMouseWake(_ wanted: Bool) {
+        DispatchQueue.main.async { [self] in wantsMouseWake = wanted }
+    }
+
+    /// Back to the fast cadence, firing at once rather than at the end of the idle interval: the
+    /// pointer has already moved by the time this runs.
+    private func wakeLoop() {
+        retime(to: config.poll, startingNow: true)
     }
 
     /// Forget what the pointer was last resolved to, so the next tick adopts a baseline instead of
@@ -129,6 +177,7 @@ final class Agent {
             forgetTarget()
             if isRunning { scheduleTimer() }   // pollMs may have changed
             syncMenuBar()
+            syncHotkey()
             Log.note("reloaded config: dwell=\(config.dwellMs)ms poll=\(config.pollMs)ms "
                 + "raise=\(config.raise) enabled=\(config.enabled)")
         }
@@ -136,13 +185,17 @@ final class Agent {
 
     // MARK: - Menu bar
 
-    /// Installed from the launch path rather than from `start()`, so the icon is there whether or
-    /// not the Accessibility grant has arrived.
+    /// Installed from the launch path rather than from `start()`, so both are there whether or not
+    /// the Accessibility grant has arrived. The hotkey especially: waiting for a permission you have
+    /// not decided to give yet is exactly when you want to be able to switch this off.
     func installMenuBar() {
-        queue.async { [self] in syncMenuBar() }
+        queue.async { [self] in
+            syncMenuBar()
+            syncHotkey()
+        }
     }
 
-    /// The click handler, and the only thing that changes `enabled` at runtime.
+    /// The click and hotkey handler, and the only thing that changes `enabled` at runtime.
     ///
     /// It writes the same defaults key `defaults write` does, so the choice survives a restart and
     /// the icon and the configuration cannot come to disagree.
@@ -156,7 +209,7 @@ final class Agent {
             forgetTarget()
             if isRunning { scheduleTimer() }
 
-            Log.note(value ? "enabled from the menu bar" : "disabled from the menu bar")
+            Log.note(value ? "enabled" : "disabled")
             syncMenuBar()
         }
     }
@@ -175,9 +228,41 @@ final class Agent {
             if menuBar == nil {
                 menuBar = MenuBarController { [weak self] in self?.toggleEnabled() }
             }
+            // Set here as well as in syncHotkey, because either can run first.
+            menuBar?.shortcut = shortcut
             // Trust is read here rather than carried across the hop: it can change at any moment,
             // and it is what decides whether the icon claims to be working.
             menuBar?.render(enabled: enabled, trusted: accessibilityTrusted(prompt: false))
+        }
+    }
+
+    /// Registers the toggle hotkey, replacing any previous one. Called on `queue`; Carbon
+    /// registration belongs to the main thread, so the value is read here and applied there.
+    private func syncHotkey() {
+        let text = config.hotkey
+        DispatchQueue.main.async { [self] in
+            // Dropping the old one unregisters it, which is also how a changed combination takes
+            // effect: there is no editing a registration in place.
+            hotkey = nil
+            shortcut = nil
+            menuBar?.shortcut = nil
+
+            let wanted = text.trimmingCharacters(in: .whitespaces)
+            guard !wanted.isEmpty, wanted.lowercased() != "none" else { return }
+            guard let spec = HotkeySpec(wanted) else {
+                Log.note("hotkey \"\(wanted)\" is not a combination I understand "
+                    + "(try cmd+ctrl+h); none registered")
+                return
+            }
+            guard let registered = Hotkey(spec: spec, action: { [weak self] in
+                self?.toggleEnabled()
+            }) else {
+                return   // Hotkey logs why
+            }
+            hotkey = registered
+            shortcut = spec
+            menuBar?.shortcut = spec
+            Log.note("hotkey \(spec.display) toggles Heed")
         }
     }
 
@@ -186,12 +271,39 @@ final class Agent {
     private func tick() {
         guard config.enabled else { return }
 
+        let sinceLastTick = lastTickAt > 0 ? now - lastTickAt : 0
+        lastTickAt = now
+
         // A circuit-breaker block expiring changes what is focusable, but nothing moves the pointer
         // to announce it. Without re-arming here, a stationary pointer over a recovered app would
         // never hit-test again: the forced test that `noteFailure` armed was already spent on the
         // tick that found the app still blocked.
         if let soonest = blockedUntil.values.min(), now >= soonest {
             blockedUntil = blockedUntil.filter { $0.value > now }
+            machine.invalidate()
+        }
+
+        // And the hit-test cooldown, for the same reason: it was spending its two seconds waiting
+        // for a deadline and then never performing the retry it waited for.
+        if hitTestCooldownUntil > 0, now >= hitTestCooldownUntil {
+            hitTestCooldownUntil = 0
+            machine.invalidate()
+        }
+
+        // Same problem, and the reason idling is not simply "wake on mouse events".
+        //
+        // A whole suppression can begin and end between two heartbeats: press Cmd-Tab with the
+        // pointer parked, and the command held, the keystroke and its cooldown are all over before
+        // the next one. The 40ms loop always saw that and armed a hit test; an idling loop sees a
+        // quiet `.normal` tick and would leave focus wherever the keyboard put it, sometimes -- and
+        // "sometimes" is the worst of the options, since it depends on where the heartbeat landed.
+        //
+        // Watching the keyboard for it is the obvious fix and the wrong one: a global key monitor
+        // is a second permission and a shape this program should not have. So the question is asked
+        // backwards instead -- is any input newer than our last tick? -- which needs no monitor and
+        // covers every kind of input at once.
+        if sinceLastTick > config.poll * 2, secondsSinceAny(of: suppressingInputs) < sinceLastTick {
+            Log.debug("input arrived while idling; re-deriving")
             machine.invalidate()
         }
 
@@ -216,6 +328,10 @@ final class Agent {
             hitTest: { self.hitTestForFocus(at: cursor) },
             isAlreadyFocused: { self.focusMatches($0) }
         )
+
+        // Every return below leaves the cadence to this, so a tick cannot exit and forget to.
+        defer { retime(to: hasPendingWork(cursorMoved: moved) ? config.poll : config.idlePoll,
+                       startingNow: false) }
 
         guard let target else { return }
 
@@ -247,6 +363,21 @@ final class Agent {
             // means the next attempt re-derives the target rather than reusing this reference.
             machine.invalidate()
         }
+    }
+
+    /// Whether anything can still change without new input from outside.
+    ///
+    /// False means the pointer is parked, no dwell or forced hit test is outstanding, and no timer
+    /// of our own is due -- so ticking 25 times a second only proves the pointer is still parked. A
+    /// mouse event wakes it again, and the idle heartbeat is the safety net for anything that never
+    /// sends one.
+    private func hasPendingWork(cursorMoved: Bool) -> Bool {
+        if cursorMoved || pendingInvalidation || machine.needsTick { return true }
+        if now < hitTestCooldownUntil { return true }
+        // A block expiring changes what is focusable with nothing to announce it, and `tick` relies
+        // on being there to notice.
+        if let soonest = blockedUntil.values.min(), soonest > now { return true }
+        return false
     }
 
     // MARK: - Guards
@@ -287,8 +418,11 @@ final class Agent {
             return .suppressing   // Cmd-Tab in progress
         }
 
-        // Only worth a round trip while something is actually pending.
-        if config.menuGuard, cursorMoved || machine.hasCandidate, overlayPresent() {
+        // Only worth a round trip while something is actually pending -- which includes a hit test
+        // armed by the previous tick. Keyed on `hasCandidate` alone, a suppressing tick cleared the
+        // candidate and the next tick stopped checking, so the still-open menu was no longer seen
+        // and the armed test could move focus underneath it.
+        if config.menuGuard, cursorMoved || machine.needsTick, overlayPresent() {
             return .suppressing
         }
 
@@ -300,6 +434,13 @@ final class Agent {
     private let deliberateMouseEvents: [CGEventType] = [
         .leftMouseDown, .rightMouseDown, .otherMouseDown,
         .leftMouseUp, .rightMouseUp, .otherMouseUp,
+    ]
+
+    /// Every input that can start a suppression, so an idling tick can tell whether one ran its
+    /// course while the loop was not looking. `flagsChanged` is in here for Cmd-Tab, which can
+    /// begin and end without a single keyDown reaching this list.
+    private lazy var suppressingInputs: [CGEventType] = deliberateMouseEvents + [
+        .keyDown, .flagsChanged,
     ]
 
     private func secondsSinceAny(of types: [CGEventType]) -> Double {
@@ -725,6 +866,12 @@ final class Agent {
     // MARK: - System events
 
     private func observeSystemEvents() {
+        // Main thread, and once: `start()` registers before the queue's `isRunning` guard, so a
+        // second call would double up every observer and leak the monitor token.
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !observersInstalled else { return }
+        observersInstalled = true
+
         let center = NSWorkspace.shared.notificationCenter
 
         for name: NSNotification.Name in [
@@ -734,7 +881,10 @@ final class Agent {
         ] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
-                queue.async { self.pendingInvalidation = true }
+                queue.async {
+                    self.pendingInvalidation = true
+                    self.wakeLoop()   // an idling loop must not sit on this for a whole heartbeat
+                }
             }
         }
 
@@ -751,6 +901,27 @@ final class Agent {
                 self.failureCounts[pid] = nil
             }
         }
+
+        // Pointer movement, which is the whole input to this program, arrives as events rather than
+        // being polled for. A global monitor sees what is delivered to other applications, which is
+        // every application but this one.
+        //
+        // It is an optimisation, not the mechanism: everything still works if it never fires, just
+        // with up to `idlePollMs` of latency instead of none, which is why the heartbeat is a
+        // second rather than a minute. Mouse-up is in the mask because a click can change what is
+        // frontmost without the pointer travelling a pixel.
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+                       .leftMouseUp, .rightMouseUp, .otherMouseUp]
+        ) { [weak self] _ in
+            guard let self, wantsMouseWake else { return }
+            wantsMouseWake = false
+            queue.async { self.wakeLoop() }
+        }
+        // Two gaps this leaves, both bounded by the heartbeat rather than closed: an event landing
+        // in the moment between the queue deciding to idle and the main thread being told, and
+        // events delivered to this process itself, which a global monitor never sees -- the pointer
+        // sitting on our own status item is the whole of that case.
 
         // The callback is a bare C function pointer, but it takes a context pointer, so it can hand
         // off to the queue instead of writing a shared global -- which was a genuine data race, and

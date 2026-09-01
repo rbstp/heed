@@ -43,7 +43,7 @@ Either way, macOS asks for Accessibility permission on first run — grant it un
 Privacy & Security > Accessibility**. The agent notices within a couple of seconds; there is nothing
 to restart.
 
-## Menu bar
+## Turning it on and off
 
 A cube in the menu bar says whether focus is following the pointer. Click it to turn Heed off, click
 again to turn it back on. The icon is dimmed while it is off, and dimmed too while the Accessibility
@@ -54,7 +54,35 @@ Clicking writes the same `enabled` key `defaults write` does, so the choice surv
 the icon and the configuration cannot come to disagree. Off, the polling timer is cancelled rather
 than left waking 25 times a second to return immediately.
 
-To keep the menu bar as it was, with `defaults write enabled` as the only switch:
+Right-click, or control-click, for a short menu: the running version, the same switch as a menu
+item, and *Open Log*. There is deliberately no *Quit* — the login agent restarts whatever exits, so
+a Quit item would be theatre. The switch is the off button; to actually stop the agent, either
+`brew uninstall --cask heed` or:
+
+```sh
+launchctl bootout gui/$(id -u)/io.github.rbstp.heed
+```
+
+**⌃⌘H toggles it from anywhere**, which the icon cannot: reaching the menu bar means dragging the
+pointer across other windows, and with focus following the pointer, that moves focus on the way to
+the switch. The combination is registered with Carbon rather than watched for, so pressing it is
+consumed instead of also landing in whatever you were typing, and it needs no Accessibility grant —
+it works while Heed is still waiting for one, which is when you are most likely to want it. The
+registration is *exclusive*: a hotkey registered the ordinary way still succeeds when another app
+already holds the combination, and then both actions fire on every press. Refused is the better
+answer, and the log names the clash so you can pick another.
+
+```sh
+defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f'   # or '' for none
+make restart
+```
+
+Modifier names are forgiving (`cmd`, `command`, `⌘`, and `+`, `-` or a space between), and at least
+one modifier that is not shift is required — a bare key would be swallowed system-wide, starting
+with your ability to type it, and `shift+a` is not a chord, it is how a capital A is typed. A combination that cannot be parsed is refused with a log line rather than quietly
+registering some other key; `Tests/FFMCoreTests/HotkeySpecTests.swift` covers that.
+
+To keep the menu bar as it was, with the hotkey and `defaults write enabled` as the switches:
 
 ```sh
 defaults write io.github.rbstp.heed menuBarIcon -bool false
@@ -69,9 +97,11 @@ Stored in the `io.github.rbstp.heed` defaults domain. Change a key, then `make r
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Master switch. Clicking the menu bar icon writes this key; off, no polling timer runs at all. |
-| `menuBarIcon` | `true` | Show the cube in the menu bar. See *Menu bar* above. |
+| `menuBarIcon` | `true` | Show the cube in the menu bar. See *Turning it on and off* above. |
+| `hotkey` | `cmd+ctrl+h` | Global combination that toggles Heed. Empty string disables it. |
 | `dwellMs` | `0` | How long the pointer must rest on a window before focus follows. `0` is instant. Raise it to ~200 if sweeping the pointer across windows churns focus more than you like. |
-| `pollMs` | `40` | Cursor sampling interval. |
+| `pollMs` | `40` | Cursor sampling interval while there is something to watch. |
+| `idlePollMs` | `1000` | Sampling interval once the pointer is parked and nothing is pending. A mouse event restores `pollMs` immediately, so this is the safety net rather than the mechanism — see *How it works*. |
 | `raise` | `true` | Also raise the window. See *Focus and raise* below. |
 | `typingCooldownMs` | `500` | Ignore the pointer for this long after a keystroke. |
 | `clickGraceMs` | `150` | Ignore the pointer for this long after a mouse press or release. Releases count so the grace survives a long drag — it starts at the drop, not at the grab. Short: unlike typing, this exists only to cover clicks that begin and end between two polls, which an instantaneous button check cannot see. |
@@ -254,9 +284,9 @@ platform constraint, not a missing feature.
 
 ## How it works
 
-1. Sample the cursor with `CGEvent.location` at `pollMs`. Already in top-left screen coordinates,
-   which is what Accessibility uses — `NSEvent.mouseLocation` is bottom-left and silently mis-targets
-   on multi-display setups.
+1. Sample the cursor with `CGEvent.location` at `pollMs`, but only while there is something to
+   watch (below). Already in top-left screen coordinates, which is what Accessibility uses —
+   `NSEvent.mouseLocation` is bottom-left and silently mis-targets on multi-display setups.
 2. When the pointer moved, hit-test with `AXUIElementCopyElementAtPosition`, which is z-order aware.
    This is what lets the whole thing stay on public API: identifying a window this way avoids having
    to map a `CGWindowID` onto an `AXUIElement`, which is what pushes yabai, AeroSpace and Amethyst
@@ -268,6 +298,30 @@ platform constraint, not a missing feature.
 4. Order the window within its app (`AXRaise` + `AXMain`), then move focus:
    `NSRunningApplication.activate`, plus `AXFrontmost` and `AXFocused` as cheap extra writes. Confirm
    it actually moved, with a tight budget.
+
+**The loop stops sampling when the pointer does.** A window can only be entered by moving onto it, so
+a pointer parked over a window that has already been resolved has nothing left to say, and sampling
+it 25 times a second only proves it is still parked. The timer drops to `idlePollMs` with half of
+that as leeway, which lets the system fire it alongside whatever else it was going to wake for —
+measured here, 25 wakeups a second becomes about one. A global mouse monitor snaps it back to
+`pollMs` on the first event, firing that tick immediately rather than at the end of the interval, so
+what this costs is wakeups rather than latency.
+
+Movement is not the only thing worth waiting for, so the loop also stays fast while a dwell is
+running, while a hit test has been armed by a suppression or a Space change, and while an
+unresponsive app's circuit breaker or hit-test cooldown is still counting down — a deadline
+expiring changes what is focusable with nothing to announce it. `DwellMachine.needsTick` is the
+tested half of that decision.
+
+The harder half is input the loop never saw. A whole suppression can begin and end between two
+heartbeats — press Cmd-Tab with the pointer parked and the modifier, the keystroke and its cooldown
+are over before the next one — where the old loop always sampled it and armed a hit test. Watching
+the keyboard for that would mean a second permission this program deliberately does not ask for, so
+the question is asked backwards instead: an idling tick checks whether any input is newer than the
+previous tick, and re-derives if so. That needs no monitor and covers every kind of input at once.
+What is left is bounded rather than eliminated: an event arriving in the moment between the loop
+deciding to idle and the monitor being told, or delivered to Heed's own status item, waits for the
+heartbeat.
 
 Confirmation reads focus back rather than trusting return codes, because a successful write proves
 nothing here. Three measurements shaped this, and each was the opposite of what the API surface

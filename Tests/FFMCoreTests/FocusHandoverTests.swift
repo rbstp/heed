@@ -12,8 +12,8 @@ final class FocusHandoverTests: XCTestCase {
     /// moved. Returns a watch already in that state.
     private func handedOver(settle: Double = 0.3) -> FocusHandover<String> {
         var handover = fresh(settle: settle)
-        handover.sample(window: "A", hasFocus: true, owner: 100, pointerMoved: false)
-        let handed = handover.sample(window: "A", hasFocus: false, owner: 200, pointerMoved: false)
+        handover.sample(window: "A", hasFocus: true, anchor: "A", owner: 100, pointerMoved: false)
+        let handed = handover.sample(window: "A", hasFocus: false, anchor: "A", owner: 200, pointerMoved: false)
         XCTAssertTrue(handed)
         return handover
     }
@@ -30,7 +30,7 @@ final class FocusHandoverTests: XCTestCase {
 
     func testAFirstLookIsNotAHandover() {
         var handover = fresh()
-        XCTAssertFalse(handover.sample(window: "A", hasFocus: false, owner: 200, pointerMoved: false))
+        XCTAssertFalse(handover.sample(window: "A", hasFocus: false, anchor: "A", owner: 200, pointerMoved: false))
         XCTAssertFalse(handover.isHolding)
     }
 
@@ -46,8 +46,8 @@ final class FocusHandoverTests: XCTestCase {
     /// away from the very window being focused and stop the retry.
     func testFocusNeverHavingArrivedIsNotAHandover() {
         var handover = fresh()
-        handover.sample(window: "C", hasFocus: false, owner: 200, pointerMoved: false)
-        XCTAssertFalse(handover.sample(window: "C", hasFocus: false, owner: 200, pointerMoved: false))
+        handover.sample(window: "C", hasFocus: false, anchor: "C", owner: 200, pointerMoved: false)
+        XCTAssertFalse(handover.sample(window: "C", hasFocus: false, anchor: "C", owner: 200, pointerMoved: false))
         XCTAssertFalse(handover.isHolding, "a failed focus attempt must stay retryable")
     }
 
@@ -55,8 +55,8 @@ final class FocusHandoverTests: XCTestCase {
     /// changing rather than the pointer, and it earns a hold on the new window just the same.
     func testADifferentWindowArrivingUnderAStillPointerIsAHandover() {
         var handover = fresh()
-        handover.sample(window: "A", hasFocus: true, owner: 100, pointerMoved: false)
-        XCTAssertTrue(handover.sample(window: "N", hasFocus: false, owner: 200, pointerMoved: false))
+        handover.sample(window: "A", hasFocus: true, anchor: "A", owner: 100, pointerMoved: false)
+        XCTAssertTrue(handover.sample(window: "N", hasFocus: false, anchor: "N", owner: 200, pointerMoved: false))
         XCTAssertEqual(decide(&handover, "N", at: 0), .hold)
     }
 
@@ -64,15 +64,15 @@ final class FocusHandoverTests: XCTestCase {
     /// would have missed it and let the parked pointer take focus back from the second app.
     func testASecondHandoverWhileAlreadyHoldingIsNoticed() {
         var handover = handedOver()
-        XCTAssertTrue(handover.sample(window: "A", hasFocus: false, owner: 300, pointerMoved: false),
+        XCTAssertTrue(handover.sample(window: "A", hasFocus: false, anchor: "A", owner: 300, pointerMoved: false),
                       "focus moved on from one holder to another without the pointer")
         XCTAssertEqual(decide(&handover, "A", frontmost: 300, at: 0), .hold)
     }
 
     func testFocusOnTheWindowUnderThePointerIsNotAHandover() {
         var handover = fresh()
-        handover.sample(window: "A", hasFocus: true, owner: 100, pointerMoved: false)
-        XCTAssertFalse(handover.sample(window: "A", hasFocus: true, owner: 100, pointerMoved: false))
+        handover.sample(window: "A", hasFocus: true, anchor: "A", owner: 100, pointerMoved: false)
+        XCTAssertFalse(handover.sample(window: "A", hasFocus: true, anchor: "A", owner: 100, pointerMoved: false))
         XCTAssertFalse(handover.isHolding)
     }
 
@@ -80,18 +80,68 @@ final class FocusHandoverTests: XCTestCase {
     /// does not even pay for the answer -- so this must both refuse to arm and re-baseline.
     func testAMovingPointerNeverArmsAndRebaselines() {
         var handover = fresh()
-        handover.sample(window: "A", hasFocus: true, owner: 100, pointerMoved: false)
-        XCTAssertFalse(handover.sample(window: "A", hasFocus: nil, owner: 200, pointerMoved: true))
-        XCTAssertFalse(handover.sample(window: "A", hasFocus: false, owner: 200, pointerMoved: false),
+        handover.sample(window: "A", hasFocus: true, anchor: "A", owner: 100, pointerMoved: false)
+        XCTAssertFalse(handover.sample(window: "A", hasFocus: nil, anchor: "A", owner: 200, pointerMoved: true))
+        XCTAssertFalse(handover.sample(window: "A", hasFocus: false, anchor: "A", owner: 200, pointerMoved: false),
                        "the sample after movement is a baseline, not a handover")
         XCTAssertFalse(handover.isHolding)
     }
 
-    func testAnUnaskedOrUnanswerableSampleRebaselines() {
+    /// Focus nobody owns cannot be held for anyone, so it can only re-establish a baseline.
+    func testASampleWithNoOwnerRebaselines() {
         var handover = fresh()
-        handover.sample(window: "A", hasFocus: true, owner: 100, pointerMoved: false)
-        handover.sample(window: nil, hasFocus: nil, owner: 200, pointerMoved: false)
-        XCTAssertFalse(handover.sample(window: "A", hasFocus: false, owner: 200, pointerMoved: false))
+        handover.sample(window: "A", hasFocus: true, anchor: "A", owner: 100, pointerMoved: false)
+        handover.sample(window: "A", hasFocus: false, anchor: "A", owner: nil, pointerMoved: false)
+        XCTAssertFalse(handover.isHolding)
+        XCTAssertFalse(handover.sample(window: "A", hasFocus: false, anchor: "A",
+                                       owner: 200, pointerMoved: false),
+                       "the sample after one that could not be attributed is a baseline")
+    }
+
+    /// Launching from the Dock: the pointer is over the Dock, which is nothing this agent would
+    /// focus, so there is no window to anchor to -- and without a hold, the walk up to the window
+    /// that just opened lost focus at the first thing crossed.
+    func testAHandoverWithThePointerOverNothingStillHolds() {
+        var handover = fresh()
+        handover.sample(window: nil, hasFocus: nil, anchor: nil, owner: 100, pointerMoved: false)
+        XCTAssertTrue(handover.sample(window: nil, hasFocus: nil, anchor: nil,
+                                      owner: 200, pointerMoved: false),
+                      "focus moved to another app while the pointer sat over nothing")
+        XCTAssertTrue(handover.isHolding)
+    }
+
+    /// Nothing to stay on means anywhere is somewhere else, so the walk is protected and the first
+    /// place the pointer stops takes focus.
+    func testAnUnanchoredHoldSurvivesCrossingAndEndsOnSettling() {
+        var handover = fresh()
+        handover.sample(window: nil, hasFocus: nil, anchor: nil, owner: 100, pointerMoved: false)
+        handover.sample(window: nil, hasFocus: nil, anchor: nil, owner: 200, pointerMoved: false)
+
+        for step in 0...20 {
+            XCTAssertEqual(decide(&handover, step.isMultiple(of: 2) ? "B" : "C",
+                                  at: Double(step) * 0.06), .hold, "crossing on the way")
+        }
+        XCTAssertEqual(decide(&handover, "B", at: 1.3), .hold)
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 1.4), .hold)
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 1.8), .entered)
+    }
+
+    /// The pointer still over nothing, and still not moving, has asked for nothing either.
+    func testAnUnanchoredHoldIsNotEndedByAWindowArrivingUnderAStillPointer() {
+        var handover = fresh()
+        handover.sample(window: nil, hasFocus: nil, anchor: nil, owner: 100, pointerMoved: false)
+        handover.sample(window: nil, hasFocus: nil, anchor: nil, owner: 200, pointerMoved: false)
+        XCTAssertEqual(decide(&handover, "P", pointerMoved: false, travelling: false, at: 0), .hold)
+        XCTAssertTrue(handover.isHolding)
+    }
+
+    /// Nothing having changed over the Dock is not a handover either, or every heartbeat would be.
+    func testTheSameNothingUnderThePointerIsNotAHandover() {
+        var handover = fresh()
+        handover.sample(window: nil, hasFocus: nil, anchor: nil, owner: 200, pointerMoved: false)
+        XCTAssertFalse(handover.sample(window: nil, hasFocus: nil, anchor: nil,
+                                       owner: 200, pointerMoved: false))
+        XCTAssertFalse(handover.isHolding)
     }
 
     // MARK: - Overruling a hold
@@ -172,8 +222,8 @@ final class FocusHandoverTests: XCTestCase {
         XCTAssertEqual(decide(&handover, "B", at: 0.0), .hold)
         XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 0.1), .hold)
         // Q is handed focus while the pointer rests on B.
-        handover.sample(window: "B", hasFocus: true, owner: 300, pointerMoved: false)
-        XCTAssertTrue(handover.sample(window: "B", hasFocus: false, owner: 300, pointerMoved: false))
+        handover.sample(window: "B", hasFocus: true, anchor: "B", owner: 300, pointerMoved: false)
+        XCTAssertTrue(handover.sample(window: "B", hasFocus: false, anchor: "B", owner: 300, pointerMoved: false))
         XCTAssertEqual(decide(&handover, "B", frontmost: 300, pointerMoved: false,
                               travelling: false, at: 0.2), .hold,
                        "B is where Q was handed focus: the pointer has asked for nothing")
@@ -228,7 +278,7 @@ final class FocusHandoverTests: XCTestCase {
         handover.reset()
         XCTAssertFalse(handover.isHolding)
         XCTAssertFalse(handover.isSettling)
-        XCTAssertFalse(handover.sample(window: "A", hasFocus: false, owner: 200, pointerMoved: false),
+        XCTAssertFalse(handover.sample(window: "A", hasFocus: false, anchor: "A", owner: 200, pointerMoved: false),
                        "the first sample after a reset is a baseline")
     }
 }

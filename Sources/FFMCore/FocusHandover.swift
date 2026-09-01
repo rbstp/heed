@@ -43,14 +43,32 @@ public struct FocusHandover<Target: Equatable> {
     /// would hold focus away from the very window being focused, and stop the retry. And focus
     /// moving on from one app to another while the pointer stays parked is a second handover, which
     /// a bare yes/no could not see because the answer was already no.
-    private var last: (window: Target, hasFocus: Bool, owner: Int32)?
+    private var last: Observation?
+
+    private struct Observation {
+        /// Nil when the pointer is over nothing this agent would focus — the Dock, the menu bar,
+        /// the desktop. That is an observation in its own right, not a missing one.
+        let window: Target?
+        /// Nil exactly when `window` is: with no window there is no question to answer.
+        let hasFocus: Bool?
+        let owner: Int32
+    }
 
     /// What the pointer was over when each app was handed focus, keyed by that app.
     ///
     /// Keyed per app rather than held as one slot because the answer depends on which app holds
     /// focus when the question is asked, and that can change back and forth without the pointer
     /// moving at all.
-    private var anchors: [Int32: Target] = [:]
+    private var holds: [Int32: Hold] = [:]
+
+    private struct Hold {
+        /// What the pointer has to leave to overrule this. Nil when it was over nothing to begin
+        /// with, in which case anywhere it settles is somewhere else — which is the whole of what
+        /// "leave" means. Launching from the Dock is the everyday case: the pointer is over the
+        /// Dock, so there is no window to anchor to, and without this the walk up to the window
+        /// that just opened took focus off it at the first thing crossed.
+        let anchor: Target?
+    }
 
     /// The window the pointer is contesting a hold on, and when it last came to rest there.
     /// `restingSince` is nil while the pointer is still travelling across it.
@@ -70,7 +88,7 @@ public struct FocusHandover<Target: Equatable> {
     }
 
     /// Whether anything is being held. Lets the caller skip the live lookups its answer needs.
-    public var isHolding: Bool { !anchors.isEmpty }
+    public var isHolding: Bool { !holds.isEmpty }
 
     /// Whether a hold is being contested right now, so the caller knows to keep asking.
     ///
@@ -85,8 +103,13 @@ public struct FocusHandover<Target: Equatable> {
     ///
     /// - Parameters:
     ///   - window: the window under the pointer, or nil when there is none this agent would focus.
-    ///   - hasFocus: whether that window holds focus, or nil when the caller did not ask. Either nil
-    ///     re-establishes a baseline rather than reading as a handover.
+    ///     Nil is a real observation — over the Dock or the desktop, focus moving is still a
+    ///     handover, and the only thing missing is something to anchor it to.
+    ///   - hasFocus: whether that window holds focus. Nil exactly when `window` is nil.
+    ///   - anchor: what a hold earned here should be measured against, which is normally `window`.
+    ///     Nil when the pointer is over nothing, and also when it is over an app whose windows
+    ///     cannot be told apart, where anchoring on one of them would make a hold the pointer could
+    ///     never end by moving within that app.
     ///   - owner: the process that holds focus now.
     ///   - pointerMoved: whether the pointer moved on this sample. A moving pointer explains the
     ///     answer changing all by itself, so nothing is read into it — and the caller is expected to
@@ -95,28 +118,28 @@ public struct FocusHandover<Target: Equatable> {
     /// - Returns: true when this sample recorded a handover, so the caller can re-derive.
     @discardableResult
     public mutating func sample(
-        window: Target?, hasFocus: Bool?, owner: Int32?, pointerMoved: Bool
+        window: Target?, hasFocus: Bool?, anchor: Target?, owner: Int32?, pointerMoved: Bool
     ) -> Bool {
         let previous = last
 
-        guard !pointerMoved, let window, let hasFocus, let owner else {
+        guard !pointerMoved, let owner else {
             last = nil
             return false
         }
-        last = (window, hasFocus, owner)
+        last = Observation(window: window, hasFocus: hasFocus, owner: owner)
 
         // Focus is where the pointer is: nothing to hold, and nothing to hold it against.
-        guard !hasFocus else { return false }
+        guard hasFocus != true else { return false }
 
         // A first look cannot tell a handover from the way things already were. And focus that was
         // *already* elsewhere, for this same window and the same holder, has not just left -- that
         // is the agent trying and failing to focus it, which must stay retryable rather than
         // becoming a hold. Anything else that changed did so without the pointer.
         guard let previous,
-              previous.hasFocus || previous.window != window || previous.owner != owner
+              previous.hasFocus == true || previous.window != window || previous.owner != owner
         else { return false }
 
-        anchors[owner] = window
+        holds[owner] = Hold(anchor: anchor)
         // Credit earned against whoever held focus before is not credit against this holder.
         pending = nil
         return true
@@ -134,14 +157,15 @@ public struct FocusHandover<Target: Equatable> {
     public mutating func decide(
         for target: Target, frontmost: Int32, pointerMoved: Bool, travelling: Bool, at now: Double
     ) -> HandoverDecision {
-        guard let anchor = anchors[frontmost] else {
+        guard let hold = holds[frontmost] else {
             pending = nil
             return .free
         }
         // Still where it was when that app was handed focus, so it has asked for nothing. Movement
         // *within* that window says nothing either, which is the point: you should be able to nudge
-        // the mouse while typing into what just opened.
-        guard anchor != target else {
+        // the mouse while typing into what just opened. A hold with no anchor skips this: there was
+        // nowhere to stay, so anywhere counts as having gone somewhere.
+        if let anchor = hold.anchor, anchor == target {
             pending = nil
             return .hold
         }
@@ -172,7 +196,7 @@ public struct FocusHandover<Target: Equatable> {
         // rest, over a longer window than recent motion covers. So the hold is spent -- not paused,
         // because a hold that came back when the pointer returned would make focus depend on where
         // the pointer had been rather than where it is.
-        anchors[frontmost] = nil
+        holds[frontmost] = nil
         pending = nil
         return .entered
     }
@@ -189,7 +213,7 @@ public struct FocusHandover<Target: Equatable> {
     /// recycled, and a hold left behind by a dead one would be applied to whatever inherits its
     /// number — as well as keeping that process's window references alive for no reason.
     public mutating func forget(owner: Int32) {
-        anchors[owner] = nil
+        holds[owner] = nil
         if pending?.owner == owner { pending = nil }
     }
 
@@ -198,7 +222,7 @@ public struct FocusHandover<Target: Equatable> {
     /// being switched off and on again, or reconfigured.
     public mutating func reset() {
         last = nil
-        anchors = [:]
+        holds = [:]
         pending = nil
     }
 }

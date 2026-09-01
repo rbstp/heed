@@ -329,6 +329,13 @@ stopping can: `handoverSettleMs` measures rest, and the clock is thrown away the
 moves on. Stopping therefore hands focus over in about half a second — the settle, plus the fifth of
 a second of recent movement that has to decay first, plus `dwellMs` if you have set one.
 
+Launching from the Dock is the case that needs this most, and the one that nearly slipped through:
+the pointer is over the Dock when you click an icon, and the Dock is not something Heed will focus,
+so there is no window to anchor a hold to. A hold with nothing to anchor to is still a hold — there
+was nowhere to stay, so anywhere the pointer settles counts as having gone somewhere. Without that,
+the walk up to the window that just opened lost focus at the first thing crossed, and you had to
+outrun it. The menu bar and the desktop work the same way.
+
 Movement *within* the window the pointer started on says nothing at all, which is the point: you can
 nudge the mouse while typing into what just opened. There is no timer either — nothing expires on its
 own, because focus sitting where you put it is not a state that needs correcting.
@@ -337,8 +344,8 @@ Three things worth knowing. A window that takes focus *by itself* is held too, b
 distinguishes it from one you asked for: a pop-up that steals focus keeps it until the pointer
 settles elsewhere, where before it would have lost focus to the parked pointer within the second.
 Apps with no usable Accessibility tree are resolved at app granularity, so their windows cannot be
-told apart; they earn no hold at all rather than one the pointer could not end by moving within the
-app. And `handoverGuard` turns the whole thing off.
+told apart; they earn a hold with no anchor rather than one anchored on a window the pointer could
+never be said to have left. And `handoverGuard` turns the whole thing off.
 
 ## Focus and raise
 

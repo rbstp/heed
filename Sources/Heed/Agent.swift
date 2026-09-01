@@ -637,15 +637,17 @@ final class Agent {
     private func noteHandover(pointerMoved: Bool) {
         guard config.handoverGuard else { return }
 
-        // An app with no usable Accessibility tree is resolved at app granularity, and every window
-        // of it compares equal. A hold anchored there could not be ended by moving to another of its
-        // windows, so those apps keep the behaviour they had before any of this.
-        let window = lastPointerWindow?.window == nil ? nil : lastPointerWindow
+        let window = lastPointerWindow
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let hasFocus = pointerMoved ? nil : window.map { focusMatches($0) }
 
+        // An app with no usable Accessibility tree is resolved at app granularity, and every window
+        // of it compares equal, so a hold anchored on one could not be ended by moving to another.
+        // It still earns a hold -- just an unanchored one, which anywhere the pointer settles ends.
+        let anchor = window?.window == nil ? nil : window
+
         let handed = handover.sample(
-            window: window, hasFocus: hasFocus,
+            window: window, hasFocus: hasFocus, anchor: anchor,
             owner: front == ownPid ? nil : front, pointerMoved: pointerMoved
         )
         guard handed else { return }

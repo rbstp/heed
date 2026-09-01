@@ -9,14 +9,16 @@ import FFMCore
 final class MenuBarController: NSObject {
     private let item: NSStatusItem
     private let onClick: () -> Void
+    private let onQuit: () -> Void
     private var state = MenuBarState(enabled: true, trusted: true)
     /// The registered hotkey, shown beside the toggle so the menu is where you find out it exists.
     /// Nil when none is registered.
     var shortcut: HotkeySpec?
 
-    init(onClick: @escaping () -> Void) {
+    init(onClick: @escaping () -> Void, onQuit: @escaping () -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
         self.onClick = onClick
+        self.onQuit = onQuit
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -63,7 +65,7 @@ final class MenuBarController: NSObject {
     }
 
     /// The menu exists for what a one-button switch cannot say: which version is running, that the
-    /// icon is a switch at all, and where the log is.
+    /// icon is a switch at all, where the log is, and how to leave.
     ///
     /// Assigned to the item and taken away again rather than left in place, because a status item
     /// that owns a menu opens it on every click -- which would cost the left-click toggle. Handing
@@ -100,6 +102,18 @@ final class MenuBarController: NSObject {
         log.target = self
         menu.addItem(log)
 
+        menu.addItem(.separator())
+
+        // Last and separated, where every other Mac app keeps it, with the ⌘Q that matches. What
+        // quitting costs is not the same in both cases -- installed, it takes the login agent with
+        // it until the next login -- so the tooltip comes from `QuitPlan`, which is also what
+        // decides how it is done.
+        let quit = NSMenuItem(title: "Quit Heed", action: #selector(quitFromMenu),
+                              keyEquivalent: "q")
+        quit.target = self
+        quit.toolTip = quitPlan.tooltip
+        menu.addItem(quit)
+
         return menu
     }
 
@@ -114,6 +128,10 @@ final class MenuBarController: NSObject {
 
     @objc private func toggleFromMenu() {
         onClick()
+    }
+
+    @objc private func quitFromMenu() {
+        onQuit()
     }
 
     /// The agent's only output. Opens in whatever handles .log, which is Console by default.

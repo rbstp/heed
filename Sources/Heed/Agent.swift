@@ -226,7 +226,12 @@ final class Agent {
                 return
             }
             if menuBar == nil {
-                menuBar = MenuBarController { [weak self] in self?.toggleEnabled() }
+                menuBar = MenuBarController(
+                    onClick: { [weak self] in self?.toggleEnabled() },
+                    // Not the agent's to do: quitting is about the process and the job launchd
+                    // holds it in, neither of which is state on `queue`.
+                    onQuit: { quitHeed() }
+                )
             }
             // Set here as well as in syncHotkey, because either can run first.
             menuBar?.shortcut = shortcut

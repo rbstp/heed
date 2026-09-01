@@ -38,6 +38,10 @@ final class Agent {
     /// distinguish the pointer moving onto a window from a window arriving under a still pointer.
     private var motion = MotionTracker(capacity: 5)
     private var lastResolved: Target?
+    /// What the pointer is over, whether or not it was allowed to take focus. See `hitTestForFocus`.
+    private var lastPointerWindow: Target?
+    /// Whether the pointer moved on the tick being served, for the guards that run below `tick`.
+    private var pointerMovedThisTick = false
 
     /// Cached per-app Accessibility elements. Keyed by pid but validated against launch date,
     /// because pids are recycled and handing a dead element back to the Accessibility API is not
@@ -51,7 +55,14 @@ final class Agent {
 
     private var isRunning = false
     private var overlayCached = false
-    private var overlayCacheUntil: Double = 0
+    private var surveyUntil: Double = 0
+    /// Focus that arrived without the pointer -- a new window, a window raised by a shortcut,
+    /// Cmd-Tab -- and the window the pointer has to leave to overrule it. Fed by `surveyWindows`,
+    /// consulted by `hitTestForFocus`.
+    private var handover = FocusHandover<Target>(settle: 0)
+    /// Whether the last hit test was withheld by a hold, so verbose mode says so once on entry
+    /// rather than on every tick for as long as the pointer stays put.
+    private var holdingFocus = false
     private var promptCached = false
     private var promptCacheUntil: Double = 0
     private var hitTestFailures = 0
@@ -95,7 +106,9 @@ final class Agent {
             syncMenuBar()
             Log.note("running: enabled=\(config.enabled) dwell=\(config.dwellMs)ms "
                 + "poll=\(config.pollMs)ms raise=\(config.raise) "
-                + "typingCooldown=\(config.typingCooldownMs)ms verbose=\(config.verbose)")
+                + "typingCooldown=\(config.typingCooldownMs)ms "
+                + "handoverGuard=\(config.handoverGuard) "
+                + "handoverSettle=\(config.handoverSettleMs)ms verbose=\(config.verbose)")
         }
     }
 
@@ -110,6 +123,7 @@ final class Agent {
         timer?.cancel()
         timer = nil
         motion = MotionTracker(capacity: max(2, Int((0.2 / config.poll).rounded())))
+        handover.settle = config.handoverSettle
 
         // Disabled means no timer rather than a tick that wakes 25 times a second to return
         // immediately. Everything that can flip `enabled` -- the menu bar, a config reload -- comes
@@ -167,6 +181,9 @@ final class Agent {
         machine.invalidate()
         motion.reset()
         lastResolved = nil
+        // And any hold, which is anchored on a window the pointer may have left long ago.
+        lastPointerWindow = nil
+        handover.reset()
     }
 
     private func reload() {
@@ -295,6 +312,12 @@ final class Agent {
             machine.invalidate()
         }
 
+        // A contested hold is a deadline like the others above: the pointer has arrived on some
+        // other window and is waiting out the settle, and once it stops moving nothing performs the
+        // hit test that would notice the settle lapse. Bounded by the settle itself, so this keeps
+        // the loop awake for a fraction of a second rather than for as long as focus is held.
+        if handover.isSettling { machine.invalidate() }
+
         // Same problem, and the reason idling is not simply "wake on mouse events".
         //
         // A whole suppression can begin and end between two heartbeats: press Cmd-Tab with the
@@ -319,6 +342,13 @@ final class Agent {
             : 0
         motion.record(step.isFinite ? step : 0)
         lastCursor = cursor
+        pointerMovedThisTick = moved
+
+        // Before anything else acts this tick. A handover has to be noticed before the machine gets
+        // a chance to undo it: a forced hit test in this same tick would otherwise take focus
+        // straight back, and then focus *would* be on the pointer's window, so there would be
+        // nothing left to notice.
+        noteHandover(pointerMoved: moved)
 
         let condition = currentCondition(cursorMoved: moved)
         if condition == .invalidating {
@@ -379,6 +409,11 @@ final class Agent {
     private func hasPendingWork(cursorMoved: Bool) -> Bool {
         if cursorMoved || pendingInvalidation || machine.needsTick { return true }
         if now < hitTestCooldownUntil { return true }
+        // A hold being contested has to be counted here even though the forced hit test that
+        // advances it is already spent by now: `machine.needsTick` is asked after `machine.tick`
+        // consumed it, so relying on that dropped the loop to the heartbeat mid-settle and turned a
+        // 300ms settle into a second and a half.
+        if handover.isSettling { return true }
         // A block expiring changes what is focusable with nothing to announce it, and `tick` relies
         // on being there to notice.
         if let soonest = blockedUntil.values.min(), soonest > now { return true }
@@ -460,9 +495,15 @@ final class Agent {
     /// pointer-driven menu is open the focused element can still report the control underneath it.
     /// The upper bound excludes the cursor's own window, which sits far above everything.
     private func overlayPresent() -> Bool {
-        // Enumerating every on-screen window is a Window Server round trip, so hold the answer for a
-        // moment rather than repeating it on consecutive ticks of the same gesture.
-        if now < overlayCacheUntil { return overlayCached }
+        surveyWindows()
+        return overlayCached
+    }
+
+    /// Enumerating every on-screen window is a Window Server round trip, so hold the answer for a
+    /// moment rather than repeating it on consecutive ticks of the same gesture.
+    private func surveyWindows() {
+        if now < surveyUntil { return }
+        surveyUntil = now + 0.1
 
         // Menus and popovers through drag images, and no further. An earlier upper bound of 2000
         // swept in the screen-saver and assistive-technology levels, where a single always-present
@@ -485,10 +526,7 @@ final class Agent {
                 break
             }
         }
-
         overlayCached = found
-        overlayCacheUntil = now + 0.1
-        return found
     }
 
     // MARK: - Hit testing
@@ -503,7 +541,42 @@ final class Agent {
     /// The raw `hitTest` stays unguarded: `--probe` and the pre-apply revalidation both need to see
     /// what is genuinely under the pointer, not what is eligible.
     private func hitTestForFocus(at point: CGPoint) -> Target? {
-        guard let target = hitTest(at: point) else { return nil }
+        guard let target = hitTest(at: point) else {
+            // Nothing resolvable under the pointer: the window closed, the pointer reached the
+            // desktop, an app stopped answering. Any contest in progress is over -- left standing it
+            // would keep the loop forcing hit tests for a settle that can never complete.
+            lastPointerWindow = nil
+            handover.abandonContest()
+            return nil
+        }
+        // What the pointer is over, as opposed to `lastResolved`, which is what was last *accepted*
+        // as a focus target. They part company exactly when a hold is in force, and the handover
+        // needs the former: a hold armed while the pointer sits on B must be anchored on B, not on
+        // wherever focus was last allowed to follow.
+        lastPointerWindow = target
+
+        // Ahead of the entry-motion guard below, which cannot see this case: nothing about the
+        // target changed -- the pointer is resting on the window it was already resting on, so
+        // there is no arrival to reject. What changed is that focus was handed somewhere else, and
+        // a pointer that has not moved since is not a request to take it back.
+        switch handoverDecision(for: target) {
+        case .hold:
+            if !holdingFocus {
+                holdingFocus = true
+                Log.debug("not focusing \(target.describedAs): focus was handed to "
+                    + "\(frontmostName()) and the pointer has not settled anywhere else since")
+            }
+            return nil
+        case .entered:
+            // The entry guard below is answered already: the handover watched the pointer travel
+            // here and stay, which is more than recent motion can still show by now.
+            holdingFocus = false
+            Log.debug("settled on \(target.describedAs); following the pointer again")
+            lastResolved = target
+            return target
+        case .free:
+            holdingFocus = false
+        }
 
         if config.entryMotionPx > 0, motion.total < Double(config.entryMotionPx) {
             guard let previous = lastResolved else {
@@ -527,6 +600,67 @@ final class Agent {
 
         lastResolved = target
         return target
+    }
+
+    /// What to do about this target while something else holds focus. The decision lives in
+    /// `FocusHandover`, where it is tested; this supplies the live facts it needs -- which app holds
+    /// focus, and how the pointer is moving -- and only while something is actually held.
+    private func handoverDecision(for target: Target) -> HandoverDecision {
+        guard config.handoverGuard, handover.isHolding,
+              let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              front != ownPid
+        else { return .free }
+        return handover.decide(
+            for: target, frontmost: front,
+            pointerMoved: pointerMovedThisTick, travelling: pointerIsTravelling, at: now
+        )
+    }
+
+    /// The entry guard's own test, so the two cannot come to disagree about what counts as a pointer
+    /// in motion -- except at `entryMotionPx` 0, where the guard is off and the comparison it uses
+    /// would be trivially true of a pointer that has not moved at all. Any travel at all stands in
+    /// for the threshold there; without it the settle clock could never start and the loop would
+    /// poll at full rate for as long as focus was held.
+    private var pointerIsTravelling: Bool {
+        config.entryMotionPx > 0
+            ? motion.total >= Double(config.entryMotionPx)
+            : motion.total > 0
+    }
+
+    /// Ask, once a tick, whether the window under the pointer still holds focus, and let the
+    /// handover judge what that means.
+    ///
+    /// Only asked when the pointer has not moved, which is both the only case that can arm a hold
+    /// and much the cheaper one: while the pointer is parked the loop is on its heartbeat, so this
+    /// is about one question a second. `focusMatches` is the same test the dwell machine uses to
+    /// decide whether focusing is needed at all, so the two cannot come to disagree.
+    private func noteHandover(pointerMoved: Bool) {
+        guard config.handoverGuard else { return }
+
+        // An app with no usable Accessibility tree is resolved at app granularity, and every window
+        // of it compares equal. A hold anchored there could not be ended by moving to another of its
+        // windows, so those apps keep the behaviour they had before any of this.
+        let window = lastPointerWindow?.window == nil ? nil : lastPointerWindow
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let hasFocus = pointerMoved ? nil : window.map { focusMatches($0) }
+
+        let handed = handover.sample(
+            window: window, hasFocus: hasFocus,
+            owner: front == ownPid ? nil : front, pointerMoved: pointerMoved
+        )
+        guard handed else { return }
+
+        Log.debug("focus was handed to \(frontmostName()); it keeps it until the pointer settles "
+            + "somewhere else")
+        // A dwell candidate formed before this must not outlive it: the machine would return it
+        // without hit-testing again, and the revalidation before applying focus deliberately uses
+        // the raw hit test, which knows nothing about holds.
+        machine.invalidate()
+    }
+
+    private func frontmostName() -> String {
+        guard let front = NSWorkspace.shared.frontmostApplication else { return "another app" }
+        return front.localizedName ?? front.bundleIdentifier ?? "pid \(front.processIdentifier)"
     }
 
     private func hitTest(at point: CGPoint) -> Target? {
@@ -904,6 +1038,9 @@ final class Agent {
                 self.appElements[pid] = nil
                 self.blockedUntil[pid] = nil
                 self.failureCounts[pid] = nil
+                // Pids are recycled: a hold left behind by a dead process would be applied to
+                // whatever inherits its number.
+                self.handover.forget(owner: pid)
             }
         }
 
@@ -985,6 +1122,12 @@ final class Agent {
         print("  overlay on screen:  \(config.menuGuard && overlayPresent() ? "yes  <- SUPPRESSING" : "no")")
         let promptHolds = config.promptGuard && frontmostPromptAwaitsAnswer()
         print("  prompt mid-question:\(promptHolds ? " yes  <- HOLDING ALL FOCUS" : " no")")
+        // Reported rather than answered: a hold belongs to the running agent, which has been
+        // watching what comes to the front. This process has just started and has no history at all.
+        let handoverSetting = config.handoverGuard
+            ? "on, settle \(config.handoverSettleMs)ms -- held by the running agent, see its log"
+            : "off"
+        print("  handover hold:      \(handoverSetting)")
 
         print("\naccessibility at cursor")
         var hit: AXUIElement?

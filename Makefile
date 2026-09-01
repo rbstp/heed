@@ -127,6 +127,13 @@ install-agent:
 	    -e 's|@LOG@|$(LOG)|g' \
 	    LaunchAgent/agent.plist.in > "$(AGENT_PLIST)"
 	-launchctl bootout $(DOMAIN)/$(BUNDLE_ID) 2>/dev/null
+	@# bootout returns before launchd has finished tearing the job down, and bootstrapping into that
+	@# window fails with "Input/output error" and leaves nothing running at all. Wait for the label
+	@# to actually go before claiming it again.
+	@for i in $$(seq 30); do \
+		launchctl print $(DOMAIN)/$(BUNDLE_ID) >/dev/null 2>&1 || break; \
+		sleep 0.1; \
+	done
 	launchctl bootstrap $(DOMAIN) "$(AGENT_PLIST)"
 	@echo "agent loaded: $(BUNDLE_ID)"
 

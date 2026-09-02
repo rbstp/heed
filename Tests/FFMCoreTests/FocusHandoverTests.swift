@@ -248,6 +248,42 @@ final class FocusHandoverTests: XCTestCase {
         XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 0.0), .entered)
     }
 
+    /// A menu-bar handoff has no window anchor. Pointer jitter below the entry threshold must not
+    /// turn "barely moved" into "settled somewhere else" and take focus from the opened window.
+    func testTinyMovementDoesNotContestAnUnanchoredHold() {
+        var handover = fresh()
+        handover.sample(window: nil, hasFocus: nil, anchor: nil, owner: 100, pointerMoved: false)
+        handover.sample(window: nil, hasFocus: nil, anchor: nil, owner: 200, pointerMoved: false)
+
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: true, travelling: false, at: 0), .hold)
+        XCTAssertFalse(handover.isSettling, "sub-threshold jitter must not start the settle clock")
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 10), .hold)
+    }
+
+    /// Once a real contest has begun, every actual movement resets rest even when its recent travel
+    /// is below the entry threshold. Rest means no movement, not merely less than six points.
+    func testTinyMovementResetsASettleInProgress() {
+        var handover = handedOver()
+        XCTAssertEqual(decide(&handover, "B", at: 0), .hold)
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 0.1), .hold)
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: true, travelling: false, at: 0.35), .hold)
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 0.4), .hold)
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 0.65), .hold)
+        XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 0.71), .entered)
+    }
+
+    /// A successful pointer-driven focus operation is a baseline, not a user handoff observed one
+    /// tick later when the frontmost process changes.
+    func testAppliedFocusEstablishesAnAuthoritativeBaseline() {
+        var handover = fresh()
+        handover.sample(window: "A", hasFocus: true, anchor: "A", owner: 100, pointerMoved: false)
+        handover.noteAppliedFocus(window: "B", owner: 200)
+
+        XCTAssertFalse(handover.sample(window: "B", hasFocus: true, anchor: "B",
+                                       owner: 200, pointerMoved: false))
+        XCTAssertFalse(handover.isHolding)
+    }
+
     // MARK: - Giving up
 
     /// The window closing, or the pointer reaching the desktop, ends the contest but not the hold.

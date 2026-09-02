@@ -348,7 +348,7 @@ final class Agent {
         // a chance to undo it: a forced hit test in this same tick would otherwise take focus
         // straight back, and then focus *would* be on the pointer's window, so there would be
         // nothing left to notice.
-        noteHandover(pointerMoved: moved)
+        noteHandover()
 
         let condition = currentCondition(cursorMoved: moved)
         if condition == .invalidating {
@@ -545,8 +545,15 @@ final class Agent {
             // Nothing resolvable under the pointer: the window closed, the pointer reached the
             // desktop, an app stopped answering. Any contest in progress is over -- left standing it
             // would keep the loop forcing hit tests for a settle that can never complete.
-            lastPointerWindow = nil
             handover.abandonContest()
+            // While moving across a menu bar, the Dock, or a gap between windows, keep the last
+            // focusable window as the baseline. Menu-opened windows arrive during exactly this gap:
+            // erasing it here left no evidence that Zen's About window had taken key focus, and the
+            // underlying browser window was focused again as soon as the menu closed. Once the
+            // pointer is stationary, nil is a real observation and replaces the old baseline.
+            if !pointerMovedThisTick {
+                lastPointerWindow = nil
+            }
             return nil
         }
         // What the pointer is over, as opposed to `lastResolved`, which is what was last *accepted*
@@ -554,6 +561,7 @@ final class Agent {
         // needs the former: a hold armed while the pointer sits on B must be anchored on B, not on
         // wherever focus was last allowed to follow.
         lastPointerWindow = target
+        noteMovingPointerBaseline(window: target)
 
         // Ahead of the entry-motion guard below, which cannot see this case: nothing about the
         // target changed -- the pointer is resting on the window it was already resting on, so
@@ -627,19 +635,20 @@ final class Agent {
             : motion.total > 0
     }
 
-    /// Ask, once a tick, whether the window under the pointer still holds focus, and let the
-    /// handover judge what that means.
+    /// Ask, once a tick, whether the window last known under the pointer still holds focus, and let
+    /// the handover judge what that means.
     ///
-    /// Only asked when the pointer has not moved, which is both the only case that can arm a hold
-    /// and much the cheaper one: while the pointer is parked the loop is on its heartbeat, so this
-    /// is about one question a second. `focusMatches` is the same test the dwell machine uses to
-    /// decide whether focusing is needed at all, so the two cannot come to disagree.
-    private func noteHandover(pointerMoved: Bool) {
+    /// This is deliberately asked before resolving the pointer's new position. Movement cannot
+    /// explain focus leaving the window the pointer was already over: Heed has not acted on the new
+    /// position yet. That closes the sampling hole where a menu-opened Settings or About window
+    /// arrived during a tiny mouse movement and the old implementation discarded the evidence.
+    /// `noteMovingPointerBaseline` records the newly resolved position later in the same tick.
+    private func noteHandover() {
         guard config.handoverGuard else { return }
 
         let window = lastPointerWindow
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let hasFocus = pointerMoved ? nil : window.map { focusMatches($0) }
+        let hasFocus = window.map { focusMatches($0) }
 
         // An app with no usable Accessibility tree is resolved at app granularity, and every window
         // of it compares equal, so a hold anchored on one could not be ended by moving to another.
@@ -648,7 +657,7 @@ final class Agent {
 
         let handed = handover.sample(
             window: window, hasFocus: hasFocus, anchor: anchor,
-            owner: front == ownPid ? nil : front, pointerMoved: pointerMoved
+            owner: front == ownPid ? nil : front, pointerMoved: false
         )
         guard handed else { return }
 
@@ -658,6 +667,21 @@ final class Agent {
         // without hit-testing again, and the revalidation before applying focus deliberately uses
         // the raw hit test, which knows nothing about holds.
         machine.invalidate()
+    }
+
+    /// Once a moving tick has resolved where the pointer is now, make that the next comparison's
+    /// baseline. Do not overwrite a hold just discovered above: that hold must judge the movement.
+    private func noteMovingPointerBaseline(window: Target?) {
+        guard config.handoverGuard, pointerMovedThisTick,
+              let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              front != ownPid, !handover.isHolding(owner: front)
+        else { return }
+
+        let anchor = window?.window == nil ? nil : window
+        handover.sample(
+            window: window, hasFocus: nil, anchor: anchor,
+            owner: front, pointerMoved: true
+        )
     }
 
     private func frontmostName() -> String {
@@ -859,6 +883,7 @@ final class Agent {
             return false
         }
         failureCounts[target.pid] = nil
+        handover.noteAppliedFocus(window: target, owner: target.pid)
         return true
     }
 

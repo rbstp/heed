@@ -90,6 +90,10 @@ public struct FocusHandover<Target: Equatable> {
     /// Whether anything is being held. Lets the caller skip the live lookups its answer needs.
     public var isHolding: Bool { !holds.isEmpty }
 
+    /// Whether `owner` currently owns a hold. A hold for some other process must not stop the caller
+    /// from updating the pointer baseline for the process that is actually frontmost.
+    public func isHolding(owner: Int32) -> Bool { holds[owner] != nil }
+
     /// Whether a hold is being contested right now, so the caller knows to keep asking.
     ///
     /// True from the moment the pointer resolves some other window, not merely once it has stopped
@@ -122,8 +126,15 @@ public struct FocusHandover<Target: Equatable> {
     ) -> Bool {
         let previous = last
 
-        guard !pointerMoved, let owner else {
+        guard let owner else {
             last = nil
+            return false
+        }
+        // Movement is an observation too. The caller supplies the target resolved at the new pointer
+        // position, so the first stationary sample afterwards can be compared with the right window
+        // without mistaking ordinary travel for the world changing underneath it.
+        guard !pointerMoved else {
+            last = Observation(window: window, hasFocus: nil, owner: owner)
             return false
         }
         last = Observation(window: window, hasFocus: hasFocus, owner: owner)
@@ -174,7 +185,7 @@ public struct FocusHandover<Target: Equatable> {
             // The pointer itself has to have moved onto this window. A window that appears under a
             // pointer which is not moving -- a pop-up, or the whole screen changing on a Space
             // switch -- came to the pointer, and no amount of waiting turns that into an entry.
-            guard pointerMoved else {
+            guard pointerMoved, travelling else {
                 pending = nil
                 return .hold
             }
@@ -184,7 +195,7 @@ public struct FocusHandover<Target: Equatable> {
         // Still travelling. Crossing a window is not arriving at it, however long the crossing
         // takes, so the clock does not start until the pointer stops -- and starts over if it
         // moves on again.
-        if travelling {
+        if pointerMoved || travelling {
             pending?.restingSince = nil
             return .hold
         }
@@ -213,6 +224,15 @@ public struct FocusHandover<Target: Equatable> {
     /// recycled, and a hold left behind by a dead one would be applied to whatever inherits its
     /// number — as well as keeping that process's window references alive for no reason.
     public mutating func forget(owner: Int32) {
+        holds[owner] = nil
+        if pending?.owner == owner { pending = nil }
+    }
+
+    /// Establish the authoritative baseline after the agent itself moved focus. Without this, the
+    /// owner change visible on the next tick is indistinguishable from focus handed over by the user
+    /// and would manufacture a hold around an ordinary pointer-driven switch.
+    public mutating func noteAppliedFocus(window: Target, owner: Int32) {
+        last = Observation(window: window, hasFocus: true, owner: owner)
         holds[owner] = nil
         if pending?.owner == owner { pending = nil }
     }

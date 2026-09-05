@@ -146,8 +146,8 @@ final class HotkeySpecTests: XCTestCase {
 
     func testTheModifierInForceIsRecognised() {
         XCTAssertEqual(ModifierPreset.matching([.control, .command]), .controlCommand)
-        XCTAssertEqual(ModifierPreset.matching(HotkeySpec("cmd+shift+left")!.modifiers),
-                       .shiftCommand)
+        XCTAssertEqual(ModifierPreset.matching(HotkeySpec("cmd+ctrl+alt+left")!.modifiers),
+                       .controlOptionCommand)
     }
 
     /// Someone who typed their own combination into `defaults write` should see none of the offered
@@ -159,8 +159,16 @@ final class HotkeySpecTests: XCTestCase {
     }
 
     func testTheCombinationsThatTakeSomethingAwaySaySo() {
-        XCTAssertNotNil(ModifierPreset.shiftCommand.caution)
         XCTAssertNotNil(ModifierPreset.optionCommand.caution)
         XCTAssertNil(ModifierPreset.controlCommand.caution)
+    }
+
+    /// Command-Shift with the arrow keys selects a line in every text field on the system, which is
+    /// too much to take away from behind a tooltip. `defaults write` still sets it for anyone who
+    /// wants it; the menu does not hand it out.
+    func testCommandShiftIsNotOffered() {
+        XCTAssertFalse(ModifierPreset.allCases.contains { $0.modifiers == [.shift, .command] })
+        XCTAssertNil(ModifierPreset.matching(HotkeySpec("cmd+shift+left")!.modifiers))
+        XCTAssertNotNil(HotkeySpec("cmd+shift+left"), "but it is still a combination Heed accepts")
     }
 }

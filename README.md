@@ -83,11 +83,12 @@ it. Every shortcut moves together or none does, so they cannot end up under two 
 
 Heed registers a hotkey exclusively, which takes the combination away from every other app. That is
 why the focus shortcuts default to Control and not Shift: Command+Shift+Left and Command+Shift+Right
-are how a line is selected in every text field on the system, and Command+Option+Left and
-Command+Option+Right move between tabs in most browsers and terminals. Both are offered in the menu
-anyway, with a tooltip saying what they cost — but neither is the default. Heed can only refuse a
-combination another app registered the same way; nothing refuses one the system reads directly, so
-those two are taken quietly.
+are how a line is selected in every text field on the system, so the menu does not offer that one at
+all. Command+Option+Left and Command+Option+Right move between tabs in most browsers and terminals;
+that one is offered, with a tooltip saying what it costs, but it is not the default. Either can still
+be set with `defaults write`. Heed can only refuse a combination another app registered the same way
+— nothing refuses one the system reads directly, so combinations like those are taken quietly, and a
+warning before the fact is the only one possible.
 
 To hide the menu bar icon:
 

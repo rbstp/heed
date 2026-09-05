@@ -134,13 +134,12 @@ public func rewriteHotkey(_ text: String, modifiers: Set<HotkeySpec.Modifier>) -
 /// change the modifier without going near `defaults write`, which remains there for anyone who
 /// wants something else.
 public enum ModifierPreset: CaseIterable, Sendable {
-    case controlCommand, optionCommand, shiftCommand, controlOption, controlOptionCommand
+    case controlCommand, optionCommand, controlOption, controlOptionCommand
 
     public var modifiers: Set<HotkeySpec.Modifier> {
         switch self {
         case .controlCommand: [.control, .command]
         case .optionCommand: [.option, .command]
-        case .shiftCommand: [.shift, .command]
         case .controlOption: [.control, .option]
         case .controlOptionCommand: [.control, .option, .command]
         }
@@ -171,13 +170,13 @@ public enum ModifierPreset: CaseIterable, Sendable {
     ///
     /// Registering a hotkey takes the combination away from every other app, and Carbon only
     /// refuses one that *another app* claimed the same way. Nothing refuses a combination the
-    /// system reads directly, so these two are taken quietly and the only warning possible is this
-    /// one, before the fact.
+    /// system reads directly, so this is the only warning possible, before the fact.
+    ///
+    /// Command-Shift is not on the list above for the same reason and taken further: with the arrow
+    /// keys it is how a line is selected in every text field on the system, which is too much to
+    /// take away from behind a tooltip. `defaults write` will still set it for anyone who wants it.
     public var caution: String? {
         switch self {
-        case .shiftCommand:
-            "Command-Shift with the arrow keys selects to the start or end of a line in every text "
-                + "field. Heed would take that away."
         case .optionCommand:
             "Command-Option with the arrow keys moves between tabs in most browsers and terminals. "
                 + "Heed would take that away."

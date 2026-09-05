@@ -50,16 +50,34 @@ unloads the current login agent. Heed starts again at the next login.
 Press **Control+Command+H** to toggle Heed from anywhere. This is often easier than moving the pointer
 to the menu bar.
 
-Change or disable the hotkey with:
+Press **Control+Command+Right** and **Control+Command+Left** to move keyboard focus to the next or
+previous window, the way Hyprland cycles windows. The order runs screen by screen from left to right,
+and left to right again within each screen: with two windows on the left display and one on the
+right, pressing the same key repeatedly visits all three and comes back round to the first. A window
+focused this way keeps focus until the pointer settles on another one, so you can keep pressing
+without the pointer taking it back.
+
+Only windows you can see are in the cycle. A window completely covered by others is skipped, so a
+stack of full-screen windows on one display is one stop rather than one per window.
+
+The focus shortcuts work whether or not Heed is switched on. The switch decides whether focus follows
+the *mouse*, and these are the keyboard.
+
+Change or disable any of them with:
 
 ```sh
 defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f'
+defaults write io.github.rbstp.heed focusNextHotkey 'cmd+shift+right'
 defaults write io.github.rbstp.heed hotkey ''
 make restart
 ```
 
-The hotkey needs at least one modifier other than Shift. If another app already owns it, Heed refuses
+A hotkey needs at least one modifier other than Shift. If another app already owns it, Heed refuses
 to register it and writes the reason to the log.
+
+Heed registers a hotkey exclusively, which takes the combination away from every other app. That is
+why the focus shortcuts default to Control and not Shift: Command+Shift+Left and Command+Shift+Right
+are how a line is selected in every text field on the system.
 
 To hide the menu bar icon:
 
@@ -80,6 +98,10 @@ Heed follows the pointer, but it avoids common focus fights:
 - Moving across the menu bar, Dock, or empty space does not discard that protection.
 - Small pointer movement does not count as settling on another window.
 - Transient windows such as floating panels are not pointer focus targets.
+- The focus shortcuts cycle the windows you can see, in the order they sit on the desk. What is in
+  the cycle depends on what is covering what; the order within it does not. Focusing a window raises
+  it, so an order taken from the stacking order would be rewritten by the act of stepping through it,
+  leaving the windows behind unreachable.
 
 macOS does not cleanly separate focus from raising across applications. Focusing another app usually
 brings it forward. The `raise` setting only controls window ordering within an app.
@@ -93,6 +115,8 @@ Settings use the `io.github.rbstp.heed` defaults domain. Restart Heed after chan
 | `enabled` | `true` | Turn focus following on or off. |
 | `menuBarIcon` | `true` | Show the menu bar icon. |
 | `hotkey` | `cmd+ctrl+h` | Global toggle. Use an empty string to disable it. |
+| `focusNextHotkey` | `cmd+ctrl+right` | Move focus to the next window. Empty to disable. |
+| `focusPreviousHotkey` | `cmd+ctrl+left` | Move focus to the previous window. Empty to disable. |
 | `dwellMs` | `0` | Time the pointer must rest before focus changes. Try `200` if instant focus is too active. |
 | `pollMs` | `40` | Pointer sampling interval while active. |
 | `idlePollMs` | `1000` | Safety check interval while idle. Mouse movement wakes the fast loop. |
@@ -181,8 +205,12 @@ rebuilds.
 
 - Focusing another application usually raises it.
 - Apps with incomplete Accessibility support may only work at application level.
-- Some games, XQuartz, and Java applications do not expose individual windows.
+- Some games, XQuartz, and Java applications do not expose individual windows. The pointer still
+  focuses them at application level; the focus shortcuts skip them, because several windows that
+  cannot be told apart would be one entry the shortcut could never step between.
 - Stage Manager may override window ordering.
+- Focusing a window raises it, so stepping onto one can bury a window that was only showing around
+  its edges. That window then leaves the cycle, because it is no longer one you can see.
 - Homebrew upgrades require Accessibility permission again.
 
 ## Development

@@ -8,6 +8,14 @@ struct Config {
     var menuBarIcon = true
     /// Parsed by `HotkeySpec` in FFMCore, where the parsing is tested. Empty disables it.
     var hotkey = "cmd+ctrl+h"
+    /// Step keyboard focus around the ring of on-screen windows; see `FocusRing` in FFMCore.
+    ///
+    /// Control rather than Shift, which is what the arrows look free with until you remember that
+    /// Cmd-Shift-Left and Cmd-Shift-Right are how a line is selected in every text field on the
+    /// system. A Carbon hotkey consumes the combination, so claiming those would take that away
+    /// everywhere. Cmd-Ctrl matches the toggle, and the pair below is only a default.
+    var focusNextHotkey = "cmd+ctrl+right"
+    var focusPreviousHotkey = "cmd+ctrl+left"
     var dwellMs = 0
     var pollMs = 40
     var idlePollMs = 1_000
@@ -134,6 +142,12 @@ struct Config {
         config.menuBarIcon = bool("menuBarIcon", config.menuBarIcon)
         if let hotkey = defaults.string(forKey: "hotkey") {
             config.hotkey = hotkey
+        }
+        if let hotkey = defaults.string(forKey: "focusNextHotkey") {
+            config.focusNextHotkey = hotkey
+        }
+        if let hotkey = defaults.string(forKey: "focusPreviousHotkey") {
+            config.focusPreviousHotkey = hotkey
         }
         config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
         config.pollMs = int("pollMs", config.pollMs, 10...1_000)

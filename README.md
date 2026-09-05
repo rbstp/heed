@@ -44,8 +44,9 @@ make uninstall
 Click the cube in the menu bar to turn focus following on or off. A dim icon means Heed is off or
 does not have Accessibility permission. Hover over it to see which one.
 
-Right-click or control-click the icon to open the log, see the installed version, or quit. Quitting
-unloads the current login agent. Heed starts again at the next login.
+Right-click or control-click the icon to change the shortcut modifier, open the log, see the
+installed version, or quit. Quitting unloads the current login agent. Heed starts again at the next
+login.
 
 Press **Control+Command+H** to toggle Heed from anywhere. This is often easier than moving the pointer
 to the menu bar.
@@ -67,7 +68,7 @@ Change or disable any of them with:
 
 ```sh
 defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f'
-defaults write io.github.rbstp.heed focusNextHotkey 'cmd+shift+right'
+defaults write io.github.rbstp.heed focusNextHotkey 'cmd+ctrl+alt+right'
 defaults write io.github.rbstp.heed hotkey ''
 make restart
 ```
@@ -75,9 +76,18 @@ make restart
 A hotkey needs at least one modifier other than Shift. If another app already owns it, Heed refuses
 to register it and writes the reason to the log.
 
+**Shortcut Modifier** in the right-click menu changes the modifier all three shortcuts use, keeping
+each key, without a restart. The icon flashes green when the change takes and red when it does not,
+in which case nothing is changed and the log names the combination and the app that already holds
+it. Every shortcut moves together or none does, so they cannot end up under two different modifiers.
+
 Heed registers a hotkey exclusively, which takes the combination away from every other app. That is
 why the focus shortcuts default to Control and not Shift: Command+Shift+Left and Command+Shift+Right
-are how a line is selected in every text field on the system.
+are how a line is selected in every text field on the system, and Command+Option+Left and
+Command+Option+Right move between tabs in most browsers and terminals. Both are offered in the menu
+anyway, with a tooltip saying what they cost — but neither is the default. Heed can only refuse a
+combination another app registered the same way; nothing refuses one the system reads directly, so
+those two are taken quietly.
 
 To hide the menu bar icon:
 

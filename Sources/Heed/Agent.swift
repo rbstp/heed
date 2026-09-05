@@ -254,7 +254,12 @@ final class Agent {
                     onClick: { [weak self] in self?.toggleEnabled() },
                     // Not the agent's to do: quitting is about the process and the job launchd
                     // holds it in, neither of which is state on `queue`.
-                    onQuit: { quitHeed() }
+                    onQuit: { quitHeed() },
+                    onChooseModifier: { [weak self] preset in
+                        self?.changeModifiers(to: preset) { accepted in
+                            self?.menuBar?.flash(accepted: accepted)
+                        }
+                    }
                 )
             }
             // Set here as well as in syncHotkey, because either can run first.
@@ -265,56 +270,193 @@ final class Agent {
         }
     }
 
+    /// The shortcuts Heed registers.
+    ///
+    /// One list, so registering them, changing their modifier and storing them cannot come to
+    /// disagree about what exists.
+    private enum Shortcut: CaseIterable {
+        case toggle, focusNext, focusPrevious
+
+        /// A third-person verb phrase, so it reads in both the line that says a hotkey works and
+        /// the line that says nothing does.
+        var which: String {
+            switch self {
+            case .toggle: "toggles Heed"
+            case .focusNext: "moves focus to the next window"
+            case .focusPrevious: "moves focus to the previous window"
+            }
+        }
+
+        var defaultsKey: String {
+            switch self {
+            case .toggle: "hotkey"
+            case .focusNext: "focusNextHotkey"
+            case .focusPrevious: "focusPreviousHotkey"
+            }
+        }
+
+        func text(in config: Config) -> String {
+            switch self {
+            case .toggle: config.hotkey
+            case .focusNext: config.focusNextHotkey
+            case .focusPrevious: config.focusPreviousHotkey
+            }
+        }
+    }
+
+    private func action(for shortcut: Shortcut) -> () -> Void {
+        switch shortcut {
+        case .toggle: { [weak self] in self?.toggleEnabled() }
+        case .focusNext: { [weak self] in self?.stepFocus(by: 1) }
+        case .focusPrevious: { [weak self] in self?.stepFocus(by: -1) }
+        }
+    }
+
     /// Registers every hotkey, replacing any previous one. Called on `queue`; Carbon registration
     /// belongs to the main thread, so the values are read here and applied there.
     private func syncHotkey() {
-        let toggle = config.hotkey
-        let next = config.focusNextHotkey
-        let previous = config.focusPreviousHotkey
+        let texts = Shortcut.allCases.map { $0.text(in: config) }
         DispatchQueue.main.async { [self] in
             // Dropping the old ones unregisters them, which is also how a changed combination takes
             // effect: there is no editing a registration in place.
             hotkeys = []
-            shortcut = nil
-            menuBar?.shortcut = nil
+            adopt(specs: [])
 
-            // Only the toggle reaches the menu: it is the one a menu can draw, and the one worth
-            // discovering there. See the key-equivalent note in MenuBarController.
-            shortcut = register(toggle, which: "toggles Heed", action: { [weak self] in
-                self?.toggleEnabled()
-            })
-            menuBar?.shortcut = shortcut
-
-            register(next, which: "moves focus to the next window", action: { [weak self] in
-                self?.stepFocus(by: 1)
-            })
-            register(previous, which: "moves focus to the previous window", action: { [weak self] in
-                self?.stepFocus(by: -1)
-            })
+            // Whatever can be had, rather than all or nothing: a combination another app holds
+            // should cost that one shortcut and not the other two. Changing the modifier is the
+            // opposite case, and says so there.
+            let claimed = claim(texts)
+            hotkeys = claimed.held
+            adopt(specs: claimed.specs)
+            announce(specs: claimed.specs)
         }
     }
 
-    /// Parse one combination and hold the registration. Main thread, called only from `syncHotkey`.
+    /// Claim a set of combinations *without* giving up whatever is registered now.
     ///
-    /// `which` is a third-person verb phrase, so it reads in both the line that says a hotkey works
-    /// and the line that says nothing does.
-    @discardableResult
-    private func register(
-        _ text: String, which: String, action: @escaping () -> Void
-    ) -> HotkeySpec? {
-        let wanted = text.trimmingCharacters(in: .whitespaces)
-        guard !wanted.isEmpty, wanted.lowercased() != "none" else { return nil }
-        guard let spec = HotkeySpec(wanted) else {
-            Log.note("hotkey \"\(wanted)\" is not a combination I understand "
-                + "(try cmd+ctrl+h); nothing \(which)")
-            return nil
+    /// The registrations are returned rather than stored, and dropping one unregisters it. That is
+    /// what lets a change be tried before the working shortcuts are given up: Carbon refuses a
+    /// combination another app already holds, and finding that out must not cost the ones that
+    /// were fine.
+    ///
+    /// `specs` is one entry per shortcut, in `Shortcut.allCases` order, nil where nothing was
+    /// registered. `refused` is only about combinations that are taken -- a setting that is empty
+    /// or does not parse asked for nothing, so there was nothing to refuse.
+    private func claim(_ texts: [String]) -> (held: [Hotkey], specs: [HotkeySpec?], refused: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        var held: [Hotkey] = []
+        var specs: [HotkeySpec?] = []
+        var refused = false
+
+        for (shortcut, text) in zip(Shortcut.allCases, texts) {
+            let wanted = text.trimmingCharacters(in: .whitespaces)
+            guard !wanted.isEmpty, wanted.lowercased() != "none" else {
+                specs.append(nil)
+                continue
+            }
+            guard let spec = HotkeySpec(wanted) else {
+                Log.note("hotkey \"\(wanted)\" is not a combination I understand "
+                    + "(try cmd+ctrl+h); nothing \(shortcut.which)")
+                specs.append(nil)
+                continue
+            }
+            guard let registered = Hotkey(spec: spec, action: action(for: shortcut)) else {
+                specs.append(nil)
+                refused = true   // Hotkey logs why
+                continue
+            }
+            held.append(registered)
+            specs.append(spec)
         }
-        guard let registered = Hotkey(spec: spec, action: action) else {
-            return nil   // Hotkey logs why
+        return (held, specs, refused)
+    }
+
+    /// Say what is registered, once it is going to be kept.
+    ///
+    /// Not from inside `claim`, which is also used to *try* a set that may be given up a moment
+    /// later: announcing those would put two combinations in the log that were unregistered before
+    /// anyone could press them.
+    private func announce(specs: [HotkeySpec?]) {
+        for (shortcut, spec) in zip(Shortcut.allCases, specs) {
+            guard let spec else { continue }
+            Log.note("hotkey \(spec.display) \(shortcut.which)")
         }
-        hotkeys.append(registered)
-        Log.note("hotkey \(spec.display) \(which)")
-        return spec
+    }
+
+    /// Tell the menu bar what is registered. Main thread; `specs` is in `Shortcut.allCases` order.
+    private func adopt(specs: [HotkeySpec?]) {
+        shortcut = specs.first.flatMap { $0 }
+        menuBar?.shortcut = shortcut
+        // From whichever shortcut actually has one, so the menu still shows the modifier in force
+        // when the toggle in particular has been switched off.
+        menuBar?.modifiers = specs.compactMap { $0 }.first?.modifiers
+    }
+
+    /// Put every shortcut under a different modifier, keeping each one's key.
+    ///
+    /// All of them or none, and only stored if it took. Half-applying a modifier would leave the
+    /// menu showing one combination while another was registered, and the shortcuts under two
+    /// different modifiers is not a state anybody asked for.
+    ///
+    /// `report` is called on the main thread, with whether it took, so the menu bar can say so.
+    func changeModifiers(to preset: ModifierPreset, report: @escaping (Bool) -> Void) {
+        queue.async { [self] in
+            let current = Shortcut.allCases.map { $0.text(in: config) }
+            let texts = current.map { rewriteHotkey($0, modifiers: preset.modifiers) }
+
+            // Compared as combinations and not as text. What is stored is however somebody wrote it
+            // -- "cmd+ctrl+h" -- and what comes back from `rewriteHotkey` is canonical --
+            // "ctrl+cmd+h" -- so the very same chord reads as a change if the strings are compared.
+            // And claiming a combination this process already holds is refused by Carbon, which
+            // would report a failure for the one case that cannot fail: choosing the modifier that
+            // is already ticked.
+            guard !zip(current, texts).allSatisfy({ HotkeySpec($0) == HotkeySpec($1) }) else {
+                DispatchQueue.main.async { report(true) }
+                return
+            }
+
+            DispatchQueue.main.async { [self] in
+                let claimed = claim(texts)
+                guard !claimed.refused else {
+                    // `claimed.held` goes out of scope here, which unregisters the partial set. The
+                    // working ones were never released, so there is nothing to put back.
+                    Log.note("keeping the current shortcuts: \(preset.display) is not free")
+                    report(false)
+                    return
+                }
+                hotkeys = claimed.held   // releases the old ones
+                adopt(specs: claimed.specs)
+                announce(specs: claimed.specs)
+
+                queue.async { [self] in
+                    // The configuration is read on this queue and applied on the main one, so it
+                    // can have moved on in between -- a SIGHUP reload is the way that happens. Its
+                    // reading is the newer one, and storing a modifier chosen against a
+                    // configuration that is already gone would leave what is registered and what is
+                    // stored describing different shortcuts until the next restart. Put the
+                    // registrations back in step with it instead, and say the change did not take.
+                    guard Shortcut.allCases.map({ $0.text(in: config) }) == current else {
+                        Log.note("the configuration changed while \(preset.display) was being "
+                            + "applied; keeping what it says instead")
+                        syncHotkey()
+                        DispatchQueue.main.async { report(false) }
+                        return
+                    }
+
+                    let store = Config.store()
+                    for (shortcut, text) in zip(Shortcut.allCases, texts) {
+                        store.set(text, forKey: shortcut.defaultsKey)
+                    }
+                    config.hotkey = texts[0]
+                    config.focusNextHotkey = texts[1]
+                    config.focusPreviousHotkey = texts[2]
+                    Log.note("shortcuts now use \(preset.display)")
+                    // Reported only once it is stored, so the icon is answering for the change that
+                    // actually happened rather than for the registration alone.
+                    DispatchQueue.main.async { report(true) }
+                }
+            }
+        }
     }
 
     // MARK: - Main loop

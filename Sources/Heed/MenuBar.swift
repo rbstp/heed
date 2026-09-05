@@ -10,15 +10,27 @@ final class MenuBarController: NSObject {
     private let item: NSStatusItem
     private let onClick: () -> Void
     private let onQuit: () -> Void
+    private let onChooseModifier: (ModifierPreset) -> Void
     private var state = MenuBarState(enabled: true, trusted: true)
     /// The registered hotkey, shown beside the toggle so the menu is where you find out it exists.
     /// Nil when none is registered.
     var shortcut: HotkeySpec?
+    /// The modifier every shortcut is registered under, so the menu can show which one is in force.
+    /// Nil when nothing is registered, or when it is a combination nobody offered.
+    var modifiers: Set<HotkeySpec.Modifier>?
+    /// The pending restore after a flash, so a second answer replaces the first rather than being
+    /// wiped by the first one's timer.
+    private var flashRestore: DispatchWorkItem?
 
-    init(onClick: @escaping () -> Void, onQuit: @escaping () -> Void) {
+    init(
+        onClick: @escaping () -> Void,
+        onQuit: @escaping () -> Void,
+        onChooseModifier: @escaping (ModifierPreset) -> Void
+    ) {
         dispatchPrecondition(condition: .onQueue(.main))
         self.onClick = onClick
         self.onQuit = onQuit
+        self.onChooseModifier = onChooseModifier
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -98,6 +110,10 @@ final class MenuBarController: NSObject {
         }
         menu.addItem(toggle)
 
+        let modifier = NSMenuItem(title: "Shortcut Modifier", action: nil, keyEquivalent: "")
+        modifier.submenu = modifierMenu()
+        menu.addItem(modifier)
+
         let log = NSMenuItem(title: "Open Log", action: #selector(openLog), keyEquivalent: "")
         log.target = self
         menu.addItem(log)
@@ -115,6 +131,58 @@ final class MenuBarController: NSObject {
         menu.addItem(quit)
 
         return menu
+    }
+
+    /// The modifier every shortcut runs under, changed in one place rather than three.
+    ///
+    /// The keys are left alone: which key does what is a matter of taste that `defaults write`
+    /// already serves, while the modifier is the part that collides with other software and so the
+    /// part worth being able to change without a restart.
+    private func modifierMenu() -> NSMenu {
+        let menu = NSMenu()
+        let current = ModifierPreset.matching(modifiers)
+        for (index, preset) in ModifierPreset.allCases.enumerated() {
+            let item = NSMenuItem(title: preset.display, action: #selector(chooseModifier(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.tag = index
+            item.state = preset == current ? .on : .off
+            // The symbols are how a Mac names these and how VoiceOver reads them; the words and the
+            // warning are what a tooltip is for.
+            item.toolTip = [preset.spoken, preset.caution].compactMap { $0 }.joined(separator: ". ")
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func chooseModifier(_ sender: NSMenuItem) {
+        let presets = ModifierPreset.allCases
+        guard presets.indices.contains(sender.tag) else { return }
+        onChooseModifier(presets[sender.tag])
+    }
+
+    /// Say whether a change took, in the one place the user is already looking.
+    ///
+    /// The icon they just clicked rather than a notification somewhere else on screen. Refusal is
+    /// shown for longer than acceptance, because it is the one that asks you to do something about
+    /// it -- and the log names the combination and the app that already holds it.
+    ///
+    /// The colour is drawn into the image rather than tinted onto it. A template image is a *mask*,
+    /// so a colour applied over one goes nowhere: `contentTintColor` on the status item's button is
+    /// simply ignored, which was measured rather than assumed.
+    func flash(accepted: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let button = item.button else { return }
+
+        flashRestore?.cancel()
+        button.image = MenuBarController.icon(accepted ? .systemGreen : .systemRed)
+
+        let restore = DispatchWorkItem { [weak self] in
+            self?.item.button?.image = MenuBarController.icon()
+            self?.flashRestore = nil
+        }
+        flashRestore = restore
+        DispatchQueue.main.asyncAfter(deadline: .now() + (accepted ? 0.7 : 1.3), execute: restore)
     }
 
     private static func modifierMask(_ spec: HotkeySpec) -> NSEvent.ModifierFlags {
@@ -158,7 +226,10 @@ final class MenuBarController: NSObject {
     /// two. Drawn in code for the same reason `Tools/make-icon.swift` is, and the drawing handler
     /// is re-run per backing scale, so the strokes stay crisp on a Retina display rather than being
     /// a 16px bitmap doubled.
-    private static func icon() -> NSImage {
+    ///
+    /// `colour` is only for the flash, and it is what stops the image being a template: a template
+    /// is a mask, and a mask has no colour to give.
+    private static func icon(_ colour: NSColor? = nil) -> NSImage {
         let side: CGFloat = 16
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
             let r = side * 0.44
@@ -187,11 +258,11 @@ final class MenuBarController: NSObject {
                 path.line(to: corner)
             }
 
-            NSColor.black.setStroke()
+            (colour ?? .black).setStroke()
             path.stroke()
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = colour == nil
         return image
     }
 }

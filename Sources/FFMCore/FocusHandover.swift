@@ -228,6 +228,26 @@ public struct FocusHandover<Target: Equatable> {
         if pending?.owner == owner { pending = nil }
     }
 
+    /// Record focus the agent moved on purpose without the pointer — its own keyboard shortcut.
+    ///
+    /// Said rather than inferred, because `sample` cannot always see it. Stepping between two
+    /// windows of the app that already held focus changes nothing `sample` looks at: the window
+    /// under the pointer is the same, it did not have focus before and does not have it now, and the
+    /// owner never changed. Nothing would be held, and the pointer would take focus back the moment
+    /// the keystroke's cooldown lapsed — undoing the very keypress that asked for this window.
+    ///
+    /// And it is the clearest case a hold exists for. A keystroke asked for this window as
+    /// deliberately as ⌘-Tab does, so it keeps focus until the pointer settles somewhere else.
+    ///
+    /// - Parameter anchor: what the pointer is over, which is what it has to leave. Nil when it is
+    ///   over nothing, or over an app whose windows cannot be told apart — the same rule `sample`
+    ///   uses, and for the same reason.
+    public mutating func noteKeyboardFocus(anchor: Target?, owner: Int32) {
+        holds[owner] = Hold(anchor: anchor)
+        // Credit earned against whoever held focus before is not credit against this holder.
+        pending = nil
+    }
+
     /// Establish the authoritative baseline after the agent itself moved focus. Without this, the
     /// owner change visible on the next tick is indistinguishable from focus handed over by the user
     /// and would manufacture a hold around an ordinary pointer-driven switch.

@@ -317,4 +317,79 @@ final class FocusHandoverTests: XCTestCase {
         XCTAssertFalse(handover.sample(window: "A", hasFocus: false, anchor: "A", owner: 200, pointerMoved: false),
                        "the first sample after a reset is a baseline")
     }
+
+    // MARK: - Focus moved by the agent's own keyboard shortcut
+
+    /// The case inference cannot reach: the shortcut steps between two windows of the app that
+    /// already held focus, so the window under the pointer, its lack of focus, and the owner are all
+    /// exactly what they were. Nothing would be held, and the pointer would take focus back.
+    func testKeyboardFocusIsHeldEvenWhenNothingObservableChanged() {
+        var handover = FocusHandover<String>(settle: 0.3)
+        // The pointer rests on C while app 1 holds focus in a window that is not C.
+        handover.sample(window: "C", hasFocus: false, anchor: "C", owner: 1, pointerMoved: false)
+        handover.sample(window: "C", hasFocus: false, anchor: "C", owner: 1, pointerMoved: false)
+        XCTAssertFalse(handover.isHolding, "nothing observable changed, so nothing is inferred")
+
+        handover.noteKeyboardFocus(anchor: "C", owner: 1)
+        XCTAssertTrue(handover.isHolding(owner: 1))
+        XCTAssertEqual(
+            handover.decide(for: "C", frontmost: 1, pointerMoved: false, travelling: false, at: 0),
+            .hold,
+            "the pointer has not moved since the keystroke, so it does not overrule it"
+        )
+    }
+
+    /// A hold from a keystroke ends the way every other one does: the pointer travels to another
+    /// window and stays there.
+    func testKeyboardFocusIsReleasedOnceThePointerSettlesElsewhere() {
+        var handover = FocusHandover<String>(settle: 0.3)
+        handover.noteKeyboardFocus(anchor: "C", owner: 1)
+
+        XCTAssertEqual(
+            handover.decide(for: "D", frontmost: 1, pointerMoved: true, travelling: true, at: 0),
+            .hold,
+            "still travelling"
+        )
+        XCTAssertEqual(
+            handover.decide(for: "D", frontmost: 1, pointerMoved: false, travelling: false, at: 1),
+            .hold,
+            "the settle clock starts when the pointer stops, not before"
+        )
+        XCTAssertEqual(
+            handover.decide(for: "D", frontmost: 1, pointerMoved: false, travelling: false, at: 1.4),
+            .entered
+        )
+    }
+
+    /// With the pointer over the Dock or the desktop there is nothing to anchor to, so anywhere it
+    /// settles counts as somewhere else.
+    func testKeyboardFocusWithNothingUnderThePointerIsEndedAnywhere() {
+        var handover = FocusHandover<String>(settle: 0)
+        handover.noteKeyboardFocus(anchor: nil, owner: 1)
+        XCTAssertEqual(
+            handover.decide(for: "A", frontmost: 1, pointerMoved: true, travelling: true, at: 0),
+            .hold
+        )
+        XCTAssertEqual(
+            handover.decide(for: "A", frontmost: 1, pointerMoved: false, travelling: false, at: 0.1),
+            .entered
+        )
+    }
+
+    /// Time banked against the previous holder is not credit against this one.
+    func testKeyboardFocusDiscardsAContestInProgress() {
+        var handover = FocusHandover<String>(settle: 0.3)
+        handover.noteKeyboardFocus(anchor: "C", owner: 1)
+        handover.decide(for: "D", frontmost: 1, pointerMoved: true, travelling: true, at: 0)
+        handover.decide(for: "D", frontmost: 1, pointerMoved: false, travelling: false, at: 0.1)
+        XCTAssertTrue(handover.isSettling)
+
+        handover.noteKeyboardFocus(anchor: "C", owner: 2)
+        XCTAssertFalse(handover.isSettling)
+        XCTAssertEqual(
+            handover.decide(for: "D", frontmost: 2, pointerMoved: false, travelling: false, at: 0.2),
+            .hold,
+            "the pointer has to travel to D again to overrule the new holder"
+        )
+    }
 }

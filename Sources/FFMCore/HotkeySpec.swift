@@ -54,6 +54,26 @@ public struct HotkeySpec: Equatable, Sendable {
         keyCode = code
     }
 
+    /// The same key under different modifiers, or nil when that would not be a legal hotkey.
+    ///
+    /// Goes back through the parser rather than building a value directly, so a combination arrived
+    /// at by changing the modifiers has to pass exactly the same rules as one someone typed --
+    /// including the one that matters, that shift alone is not a chord.
+    public func withModifiers(_ modifiers: Set<Modifier>) -> HotkeySpec? {
+        HotkeySpec((modifiers.map(\.rawValue) + [key]).joined(separator: "+"))
+    }
+
+    /// The combination in the form `defaults write` takes, which is the form this parses. The
+    /// counterpart to `display`: that one is for reading, this one is for storing.
+    public var written: String {
+        var parts: [String] = []
+        if modifiers.contains(.control) { parts.append("ctrl") }
+        if modifiers.contains(.option) { parts.append("alt") }
+        if modifiers.contains(.shift) { parts.append("shift") }
+        if modifiers.contains(.command) { parts.append("cmd") }
+        return (parts + [key]).joined(separator: "+")
+    }
+
     /// The combination the way macOS writes it, in the order macOS orders it: ⌃⌥⇧⌘ then the key.
     /// Used in the log and anywhere the hotkey has to be shown.
     public var display: String {
@@ -92,4 +112,82 @@ public struct HotkeySpec: Equatable, Sendable {
         "minus": 27, "equal": 24, "grave": 50, "comma": 43, "period": 47, "slash": 44,
         "semicolon": 41, "quote": 39, "backslash": 42, "leftbracket": 33, "rightbracket": 30,
     ]
+}
+
+/// Rewrite a hotkey setting under different modifiers, keeping its key.
+///
+/// A setting that names no hotkey -- empty, or "none" -- is left exactly as it is. There is no key
+/// to keep, and a shortcut somebody switched off must not come back because they changed the
+/// modifier. So is anything that does not parse, which was already reported when it was loaded.
+public func rewriteHotkey(_ text: String, modifiers: Set<HotkeySpec.Modifier>) -> String {
+    let wanted = text.trimmingCharacters(in: .whitespaces)
+    guard !wanted.isEmpty, wanted.lowercased() != "none",
+          let spec = HotkeySpec(wanted),
+          let changed = spec.withModifiers(modifiers)
+    else { return text }
+    return changed.written
+}
+
+/// The modifier combinations the menu offers, in the order it offers them.
+///
+/// A short list rather than every legal combination: this is a menu, and the point of it is to
+/// change the modifier without going near `defaults write`, which remains there for anyone who
+/// wants something else.
+public enum ModifierPreset: CaseIterable, Sendable {
+    case controlCommand, optionCommand, controlOption, controlOptionCommand
+
+    public var modifiers: Set<HotkeySpec.Modifier> {
+        switch self {
+        case .controlCommand: [.control, .command]
+        case .optionCommand: [.option, .command]
+        case .controlOption: [.control, .option]
+        case .controlOptionCommand: [.control, .option, .command]
+        }
+    }
+
+    /// The way macOS writes it, which is what the menu shows.
+    public var display: String {
+        var text = ""
+        if modifiers.contains(.control) { text += "⌃" }
+        if modifiers.contains(.option) { text += "⌥" }
+        if modifiers.contains(.shift) { text += "⇧" }
+        if modifiers.contains(.command) { text += "⌘" }
+        return text
+    }
+
+    /// In words, for the tooltip: the symbols are how a Mac names these, but they are not how
+    /// anyone would say one out loud.
+    public var spoken: String {
+        var parts: [String] = []
+        if modifiers.contains(.control) { parts.append("Control") }
+        if modifiers.contains(.option) { parts.append("Option") }
+        if modifiers.contains(.shift) { parts.append("Shift") }
+        if modifiers.contains(.command) { parts.append("Command") }
+        return parts.joined(separator: "-")
+    }
+
+    /// What is already spoken for, or nil when there is nothing to say.
+    ///
+    /// Registering a hotkey takes the combination away from every other app, and Carbon only
+    /// refuses one that *another app* claimed the same way. Nothing refuses a combination the
+    /// system reads directly, so this is the only warning possible, before the fact.
+    ///
+    /// Command-Shift is not on the list above for the same reason and taken further: with the arrow
+    /// keys it is how a line is selected in every text field on the system, which is too much to
+    /// take away from behind a tooltip. `defaults write` will still set it for anyone who wants it.
+    public var caution: String? {
+        switch self {
+        case .optionCommand:
+            "Command-Option with the arrow keys moves between tabs in most browsers and terminals. "
+                + "Heed would take that away."
+        default: nil
+        }
+    }
+
+    /// Which of these a set of modifiers is, or nil when it is something else entirely -- somebody
+    /// typed their own into `defaults write`, and none of the offered ones should look chosen.
+    public static func matching(_ modifiers: Set<HotkeySpec.Modifier>?) -> ModifierPreset? {
+        guard let modifiers else { return nil }
+        return allCases.first { $0.modifiers == modifiers }
+    }
 }

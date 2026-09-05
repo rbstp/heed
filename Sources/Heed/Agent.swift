@@ -42,6 +42,9 @@ final class Agent {
     private var lastPointerWindow: Target?
     /// Whether the pointer moved on the tick being served, for the guards that run below `tick`.
     private var pointerMovedThisTick = false
+    /// Whether `noteHandover` discovered a hold on the tick being served. See
+    /// `noteMovingPointerBaseline`, which is the only thing that asks.
+    private var handoverNotedThisTick = false
 
     /// Cached per-app Accessibility elements. Keyed by pid but validated against launch date,
     /// because pids are recycled and handing a dead element back to the Accessibility API is not
@@ -670,6 +673,7 @@ final class Agent {
     /// arrived during a tiny mouse movement and the old implementation discarded the evidence.
     /// `noteMovingPointerBaseline` records the newly resolved position later in the same tick.
     private func noteHandover() {
+        handoverNotedThisTick = false
         guard config.handoverGuard else { return }
 
         let window = lastPointerWindow
@@ -686,6 +690,7 @@ final class Agent {
             owner: front == ownPid ? nil : front, pointerMoved: false
         )
         guard handed else { return }
+        handoverNotedThisTick = true
 
         Log.debug("focus was handed to \(frontmostName()); it keeps it until the pointer settles "
             + "somewhere else")
@@ -697,10 +702,18 @@ final class Agent {
 
     /// Once a moving tick has resolved where the pointer is now, make that the next comparison's
     /// baseline. Do not overwrite a hold just discovered above: that hold must judge the movement.
+    ///
+    /// "Just discovered", and not "in force", which is what this used to ask -- and it was the
+    /// difference between a hold that can be overruled and one that cannot. Skipping the baseline
+    /// for the whole life of a hold left `last` pointing at the window the pointer had already left,
+    /// so the very next tick saw a window that was not the one it asked about last time and read it
+    /// as the world changing underneath a still pointer: a fresh hold, anchored on wherever the
+    /// pointer had just arrived, and the contest it was in the middle of thrown away. Focus could
+    /// then never follow the pointer again until something else changed which app was frontmost.
     private func noteMovingPointerBaseline(window: Target?) {
-        guard config.handoverGuard, pointerMovedThisTick,
+        guard config.handoverGuard, pointerMovedThisTick, !handoverNotedThisTick,
               let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              front != ownPid, !handover.isHolding(owner: front)
+              front != ownPid
         else { return }
 
         let anchor = window?.window == nil ? nil : window

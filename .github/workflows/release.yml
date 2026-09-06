@@ -10,6 +10,8 @@ on:
     paths-ignore:
       - .github/**
       - README.md
+      # The Raycast extension ships through the Raycast store, not the app's release.
+      - raycast/**
   workflow_dispatch:
     inputs:
       version:

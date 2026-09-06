@@ -129,7 +129,16 @@ The same vocabulary as flags on the installed binary:
 ### With Raycast
 
 Raycast already tiles and switches windows; Heed adds the pointer. Give Raycast the hotkey and let
-Heed claim nothing:
+Heed claim nothing.
+
+There is a Raycast extension in [`raycast/`](raycast/) with a command for each of these, so the
+hotkey is Raycast's and Heed claims nothing. Until it is in the store, run it from a checkout:
+
+```sh
+cd raycast && npm install && npm run dev
+```
+
+Or without the extension, with a Quicklink:
 
 1. Create a Quicklink to `heed://focus/next` and assign it a hotkey.
 2. Free the combination Heed holds: `defaults write io.github.rbstp.heed focusNextHotkey ''`, then
@@ -261,8 +270,8 @@ make dist
 ```
 
 CI tests and packages pull requests. Merging into `master` creates a release unless the change only
-touches `.github/` or this README, or the title contains `[skip-release]`. A title starting with
-`feat` bumps the minor version; anything else bumps the patch.
+touches `.github/`, `raycast/` or this README, or the title contains `[skip-release]`. A title
+starting with `feat` bumps the minor version; anything else bumps the patch.
 
 ## Prior art
 

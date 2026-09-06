@@ -1,11 +1,15 @@
 import AppKit
 import ApplicationServices
+import FFMCore
 import Foundation
 
 func accessibilityTrusted(prompt: Bool) -> Bool {
     let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
     return AXIsProcessTrustedWithOptions([key: prompt] as CFDictionary)
 }
+
+let usage = "usage: Heed [--probe [X Y]] [--toggle] [--on] [--off] "
+    + "[--focus next|previous|left|right|up|down|1-9]\n"
 
 let agent = Agent()
 
@@ -16,15 +20,36 @@ if let flag = CommandLine.arguments.firstIndex(of: "--probe") {
     exit(0)
 }
 
+// `--toggle`, `--on`, `--off`, `--focus <what>`: tell the running agent and exit. A second process
+// cannot reach its state, so the command travels as a distributed notification.
+switch commandLineRequest(CommandLine.arguments) {
+case .command(let command):
+    DistributedNotificationCenter.default().postNotificationName(
+        Notification.Name(commandNotification), object: command.written,
+        userInfo: nil, deliverImmediately: true
+    )
+    print("sent \(command.written) to Heed")
+    exit(0)
+case .unknown(let flag):
+    FileHandle.standardError.write(Data("Heed: \(flag) is not an option I know\n\(usage)".utf8))
+    exit(2)
+case .none:
+    break
+}
+
 // A status item needs NSApplication's window server connection and event loop to be clickable.
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
 Log.note("Heed starting (\(bundleID))")
 
-// Both before the permission gate, so a reload and the switch work while the grant is outstanding.
+// All before the permission gate, so a reload, the switch and the commands work while the grant is
+// still outstanding.
+let delegate = AppDelegate(agent: agent)
+app.delegate = delegate
 agent.installSignalHandlers()
 agent.installMenuBar()
+agent.observeCommands()
 var permissionWaiter: DispatchSourceTimer?
 
 if accessibilityTrusted(prompt: true) {

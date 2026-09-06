@@ -188,21 +188,39 @@ final class Agent {
         }
     }
 
-    /// Writes the same defaults key `defaults write` does, so the choice survives a restart.
     func toggleEnabled() {
-        queue.async { [self] in
-            let value = !config.enabled
-            config.enabled = value
-            Config.store().set(value, forKey: "enabled")
+        queue.async { [self] in applyEnabled(!config.enabled) }
+    }
 
-            forgetTarget()
-            if isRunning {
-                scheduleTimer()
-                seedPointerWindow()
-            }
+    func setEnabled(_ value: Bool) {
+        queue.async { [self] in applyEnabled(value) }
+    }
 
-            Log.note(value ? "enabled" : "disabled")
-            syncMenuBar()
+    /// Writes the same defaults key `defaults write` does, so the choice survives a restart.
+    private func applyEnabled(_ value: Bool) {
+        guard value != config.enabled else { return }
+        config.enabled = value
+        Config.store().set(value, forKey: "enabled")
+
+        forgetTarget()
+        if isRunning {
+            scheduleTimer()
+            seedPointerWindow()
+        }
+
+        Log.note(value ? "enabled" : "disabled")
+        syncMenuBar()
+    }
+
+    /// Everything another program can ask for, over the URL scheme or the command-line flags.
+    func perform(_ command: HeedCommand) {
+        switch command {
+        case .toggle: toggleEnabled()
+        case .enable: setEnabled(true)
+        case .disable: setEnabled(false)
+        case .focusStep(let delta): stepFocus(by: delta)
+        case .focusNumber(let number): focusWindow(number)
+        case .focusDirection(let direction): focusDirection(direction)
         }
     }
 
@@ -1448,6 +1466,22 @@ final class Agent {
             guard let context else { return }
             Unmanaged<Agent>.fromOpaque(context).takeUnretainedValue().invalidateFromSystemEvent()
         }, Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    /// Commands from a second copy of the binary, which cannot reach this process's state. Any
+    /// process in the login session can post one; they toggle Heed and move focus, nothing more.
+    func observeCommands() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(commandNotification), object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let text = note.object as? String else { return }
+            guard let command = parseCommand(text) else {
+                Log.note("ignoring a command I do not understand: \(text)")
+                return
+            }
+            Log.debug("command: \(text)")
+            perform(command)
+        }
     }
 
     /// Installed before the Accessibility gate; otherwise SIGHUP kept its default disposition while

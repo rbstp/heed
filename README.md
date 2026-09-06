@@ -106,6 +106,42 @@ defaults write io.github.rbstp.heed menuBarIcon -bool false
 make restart
 ```
 
+## Drive it from somewhere else
+
+Every shortcut Heed registers is taken away from every other app, so it can also be driven without
+registering anything. A URL reaches the running agent directly:
+
+```sh
+open 'heed://focus/next'
+open 'heed://focus/left'
+open 'heed://focus/3'
+open 'heed://toggle'      # also enable, disable
+```
+
+The same vocabulary as flags on the installed binary:
+
+```sh
+~/Applications/Heed.app/Contents/MacOS/Heed --focus next
+~/Applications/Heed.app/Contents/MacOS/Heed --toggle
+~/Applications/Heed.app/Contents/MacOS/Heed --on
+```
+
+### With Raycast
+
+Raycast already tiles and switches windows; Heed adds the pointer. Give Raycast the hotkey and let
+Heed claim nothing:
+
+1. Create a Quicklink to `heed://focus/next` and assign it a hotkey.
+2. Free the combination Heed holds: `defaults write io.github.rbstp.heed focusNextHotkey ''`, then
+   `make restart`.
+
+Turning `warpPointer` on is what makes Raycast's own Switch Windows move the pointer too, since that
+is a keyboard-driven focus change like any other.
+
+The flags reach the running agent over a distributed notification, which any process in your login
+session can post and read. The vocabulary is toggle-and-focus only: it carries no window contents
+and reads nothing back.
+
 ## Behavior
 
 Heed follows the pointer but avoids the common focus fights:

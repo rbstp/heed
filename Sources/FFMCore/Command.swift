@@ -64,3 +64,28 @@ private func parseFocus(_ what: String) -> HeedCommand? {
     guard what.count == 1, let number = Int(what), (1...9).contains(number) else { return nil }
     return .focusNumber(number)
 }
+
+/// The command a `heed://` URL asks for: `heed://focus/next`, `heed://toggle`.
+public func parseCommand(host: String?, path: String) -> HeedCommand? {
+    parseCommand(path: [host ?? ""] + path.split(separator: "/").map(String.init))
+}
+
+/// What a command line asks of a running Heed.
+public enum CommandLineRequest: Equatable, Sendable {
+    /// No flag asked for anything; start normally.
+    case none
+    case command(HeedCommand)
+    case unknown(String)
+}
+
+/// Read `--toggle`, `--on`, `--off`, `--focus <what>` off a command line. The first argument is the
+/// executable, and `--probe` is the caller's own business: it never reaches here.
+public func commandLineRequest(_ arguments: [String]) -> CommandLineRequest {
+    let arguments = arguments.dropFirst()
+    guard let index = arguments.firstIndex(where: { $0.hasPrefix("--") }) else { return .none }
+
+    let flag = arguments[index]
+    let path = [String(flag.dropFirst(2))] + arguments[arguments.index(after: index)...].prefix(1)
+    guard let command = parseCommand(path: path) else { return .unknown(flag) }
+    return .command(command)
+}

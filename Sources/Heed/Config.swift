@@ -2,6 +2,8 @@ import FFMCore
 import Foundation
 
 let bundleID = "io.github.rbstp.heed"
+/// Distributed notification a second copy of the binary posts to reach the running agent.
+let commandNotification = "\(bundleID).command"
 
 struct Config {
     var enabled = true

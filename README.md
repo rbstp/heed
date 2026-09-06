@@ -33,8 +33,9 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
 
 ## Use
 
-- **Click** the menu bar cube to turn focus following on or off. A dim icon means off or no
-  Accessibility permission; hover to see which.
+- **Click** the pointer in the menu bar to turn focus following on or off. The pointer shows rays
+  while Heed is on and none while it is off. A dim icon means Heed cannot work, because it is off or
+  has no Accessibility permission; hover to see which.
 - **Right-click** (or control-click) it to change the shortcut modifier, open the log, see the
   version, or quit. Quitting unloads the login agent until the next login.
 - **Control+Command+H** toggles Heed from anywhere.

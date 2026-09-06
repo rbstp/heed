@@ -4,8 +4,9 @@ import Foundation
 /// Focus that arrived without the pointer (a new window, a shortcut, Cmd-Tab) is held until the
 /// pointer travels to another window and rests there. The window it set out from is exempt only
 /// until it leaves: a pointer that has been somewhere else is a mouse in use, and the hold then
-/// ends wherever it stops, that window included. Leaving is judged from the pointer's position as
-/// well as from the hit test, which is not allowed to run while focus decisions are suppressed.
+/// ends wherever it stops, that window included. Leaving is judged from the window the pointer is
+/// over as the window server numbers it, since the hit test is not allowed to run while focus
+/// decisions are suppressed.
 ///
 /// The signal is asked once a tick: does the window under the pointer hold focus? When that answer
 /// turns to no while the pointer has not moved, something other than the pointer moved focus. A
@@ -40,8 +41,9 @@ public struct FocusHandover<Target: Equatable> {
     private struct Hold {
         /// What the pointer must leave. Nil when it was over nothing, so anywhere it settles counts.
         let anchor: Target?
-        /// The anchor's frame, so leaving can be judged from a position alone.
-        let region: CGRect?
+        /// The window server's number for what the pointer was on. A stable identity: it survives
+        /// the window moving, and it tells overlapping windows apart, which a frame cannot.
+        let number: Int?
         /// Where the pointer was while the anchor still held it.
         let pointer: CGPoint?
         /// Set once the pointer has been seen away from the anchor; coming back is then an arrival.
@@ -50,16 +52,16 @@ public struct FocusHandover<Target: Equatable> {
         var unseenTravel = false
 
         func staying(at pointer: CGPoint?) -> Hold {
-            Hold(anchor: anchor, region: region, pointer: pointer ?? self.pointer,
+            Hold(anchor: anchor, number: number, pointer: pointer ?? self.pointer,
                  left: left, unseenTravel: unseenTravel)
         }
 
         var away: Hold {
-            Hold(anchor: anchor, region: region, pointer: pointer, left: true, unseenTravel: true)
+            Hold(anchor: anchor, number: number, pointer: pointer, left: true, unseenTravel: true)
         }
 
         var spent: Hold {
-            Hold(anchor: anchor, region: region, pointer: pointer, left: true, unseenTravel: false)
+            Hold(anchor: anchor, number: number, pointer: pointer, left: true, unseenTravel: false)
         }
     }
 
@@ -88,8 +90,8 @@ public struct FocusHandover<Target: Equatable> {
     /// Returns true when this sample recorded a handover.
     @discardableResult
     public mutating func sample(
-        window: Target?, hasFocus: Bool?, anchor: Target?, region: CGRect?, pointer: CGPoint?,
-        owner: Int32?, pointerMoved: Bool
+        window: Target?, hasFocus: Bool?, anchor: Target?, number: @autoclosure () -> Int?,
+        pointer: CGPoint?, owner: Int32?, pointerMoved: Bool
     ) -> Bool {
         let previous = last
 
@@ -111,7 +113,7 @@ public struct FocusHandover<Target: Equatable> {
               previous.hasFocus == true || previous.window != window || previous.owner != owner
         else { return false }
 
-        holds[owner] = born(anchor: anchor, region: region, pointer: pointer)
+        holds[owner] = born(anchor: anchor, number: number(), pointer: pointer, after: holds[owner])
         pending = nil
         return true
     }
@@ -159,14 +161,14 @@ public struct FocusHandover<Target: Equatable> {
     }
 
     /// Fold in where the pointer is, every tick, whether or not a hit test is allowed this one.
-    public mutating func notePointer(_ pointer: CGPoint) {
+    public mutating func notePointer(_ pointer: CGPoint, under number: Int?) {
         var accounted = !holds.isEmpty
         for (owner, hold) in holds {
             guard !hold.left else {
                 accounted = false
                 continue
             }
-            let away = hold.region.map { !$0.contains(pointer) }
+            let away = hold.number.map { $0 != number && moved(from: hold.pointer, to: pointer) }
                 ?? moved(from: hold.pointer, to: pointer)
             holds[owner] = away ? hold.away : hold.staying(at: pointer)
             if away { accounted = false }
@@ -176,12 +178,15 @@ public struct FocusHandover<Target: Equatable> {
         if accounted { lastAsked = pointer }
     }
 
-    /// A hold the pointer is already away from is born spent; nothing else could have put it there.
-    private mutating func born(anchor: Target?, region: CGRect?, pointer: CGPoint?) -> Hold {
+    /// A hold declared where one already stands keeps what the pointer has done since: focus
+    /// arriving twice does not put the pointer back where it started. Only an anchor can be
+    /// identified by number, so an unanchored hold keeps its "anywhere it settles counts".
+    private mutating func born(
+        anchor: Target?, number: Int?, pointer: CGPoint?, after standing: Hold? = nil
+    ) -> Hold {
         lastAsked = pointer
-        let away = region.map { region in pointer.map { !region.contains($0) } ?? false } ?? false
-        let hold = Hold(anchor: anchor, region: region, pointer: pointer)
-        return away ? hold.away : hold
+        return Hold(anchor: anchor, number: anchor == nil ? nil : number, pointer: pointer,
+                    left: standing?.left ?? false, unseenTravel: standing?.unseenTravel ?? false)
     }
 
     /// Unknown either way counts as staying put: an answer that cannot be given cannot end a hold.
@@ -194,6 +199,9 @@ public struct FocusHandover<Target: Equatable> {
     /// pointer is over. Left standing, it would keep the loop awake for a settle that cannot end.
     public mutating func abandonContest() {
         pending = nil
+        for (owner, hold) in holds where hold.unseenTravel {
+            holds[owner] = hold.spent
+        }
     }
 
     /// Drop everything about a process that exited; pids are recycled.
@@ -205,9 +213,9 @@ public struct FocusHandover<Target: Equatable> {
     /// Record focus the agent moved by keyboard. Said rather than inferred: stepping between two
     /// windows of the app that already had focus changes nothing `sample` can see.
     public mutating func noteKeyboardFocus(
-        anchor: Target?, region: CGRect?, pointer: CGPoint?, owner: Int32
+        anchor: Target?, number: Int?, pointer: CGPoint?, owner: Int32
     ) {
-        holds[owner] = born(anchor: anchor, region: region, pointer: pointer)
+        holds[owner] = born(anchor: anchor, number: number, pointer: pointer)
         pending = nil
     }
 

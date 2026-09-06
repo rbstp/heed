@@ -104,6 +104,7 @@ final class Agent {
         timer = nil
         motion = MotionTracker(capacity: max(2, Int((0.2 / config.poll).rounded())))
         handover.settle = config.handoverSettle
+        handover.travel = Double(config.entryMotionPx)
 
         guard config.enabled else {
             interval = 0
@@ -436,6 +437,9 @@ final class Agent {
         motion.record(lastCursor.x.isFinite ? hypot(cursor.x - lastCursor.x, cursor.y - lastCursor.y) : 0)
         lastCursor = cursor
         pointerMovedThisTick = moved
+        // Asked before the guards: a pointer leaving the window it was handed from is readable
+        // whether or not this tick may act on it.
+        if config.handoverGuard, cursor.x.isFinite { handover.notePointer(cursor) }
 
         // Before the machine can undo it: a forced hit test this tick would take focus straight back.
         noteHandover()
@@ -664,7 +668,7 @@ final class Agent {
               front != ownPid
         else { return .free }
         return handover.decide(
-            for: target, frontmost: front,
+            for: target, frontmost: front, pointer: pointerLocation,
             pointerMoved: pointerMovedThisTick, travelling: pointerIsTravelling, at: now
         )
     }
@@ -696,6 +700,7 @@ final class Agent {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         return handover.sample(
             window: window, hasFocus: window.map { focusMatches($0) }, anchor: anchor(for: window),
+            region: region(for: window), pointer: pointerLocation,
             owner: front == ownPid ? nil : front, pointerMoved: false
         )
     }
@@ -710,9 +715,19 @@ final class Agent {
         if config.handoverGuard { _ = sampleHandover() }
     }
 
+    /// The pointer as a hold should record it. Nil until a tick has read it: a position that is not
+    /// known yet must not read as one the pointer has left.
+    private var pointerLocation: CGPoint? { lastCursor.x.isFinite ? lastCursor : nil }
+
     /// An app-level target compares equal for every window of its app, so it cannot anchor a hold.
     private func anchor(for window: Target?) -> Target? {
         window?.window == nil ? nil : window
+    }
+
+    /// Where an anchor's window is, for judging that the pointer left it without a hit test.
+    private func region(for window: Target?) -> CGRect? {
+        guard let frame = anchor(for: window)?.frame, !frame.isNull, !frame.isEmpty else { return nil }
+        return frame
     }
 
     /// Record the newly resolved window as the next comparison's baseline, except on the tick a hold
@@ -725,7 +740,7 @@ final class Agent {
 
         handover.sample(
             window: window, hasFocus: nil, anchor: anchor(for: window),
-            owner: front, pointerMoved: true
+            region: region(for: window), pointer: pointerLocation, owner: front, pointerMoved: true
         )
     }
 
@@ -1028,9 +1043,12 @@ final class Agent {
                 + "(\(index + 1) of \(windows.count))")
 
             // Where the pointer is now, not as of the last tick: movement before the keystroke must
-            // not release the hold this declares. Written back so `noteHandover` samples the same.
-            lastPointerWindow = (CGEvent(source: nil)?.location).flatMap { hitTest(at: $0) }
-            if hitTestAnswered { adoptPointerWindow(lastPointerWindow) }
+            // not release the hold this declares. Written back so `noteHandover` samples the same
+            // window; a hit test that could not answer leaves the last answer standing, since "over
+            // nothing" is a claim only an answered one can make.
+            let cursor = CGEvent(source: nil)?.location ?? pointerLocation
+            let under = cursor.flatMap { hitTest(at: $0) }
+            if hitTestAnswered { adoptPointerWindow(under) }
 
             guard applyFocus(to: target, followingPointer: false) else { return }
             // Recorded even when the app refused the window, so the shortcut walks past such
@@ -1041,7 +1059,10 @@ final class Agent {
             // A step between two windows of the frontmost app changes nothing `noteHandover` can
             // see, so the hold is declared here.
             if config.handoverGuard {
-                handover.noteKeyboardFocus(anchor: anchor(for: lastPointerWindow), owner: target.pid)
+                handover.noteKeyboardFocus(
+                    anchor: anchor(for: lastPointerWindow), region: region(for: lastPointerWindow),
+                    pointer: cursor, owner: target.pid
+                )
             }
             machine.invalidate()
             wakeLoop()

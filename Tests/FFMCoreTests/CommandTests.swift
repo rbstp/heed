@@ -39,19 +39,24 @@ final class CommandTests: XCTestCase {
         XCTAssertNil(parseCommand("focus/next/again"))
     }
 
-    func testOnlyWindowsOneToNine() {
+    /// The shortcuts stop at the digit keys; a window picked from a list does not.
+    func testWindowNumbersRunPastTheDigitKeys() {
         XCTAssertEqual(parseCommand("focus/1"), .focusNumber(1))
         XCTAssertEqual(parseCommand("focus/9"), .focusNumber(9))
+        XCTAssertEqual(parseCommand("focus/10"), .focusNumber(10))
+        XCTAssertEqual(parseCommand("focus/99"), .focusNumber(99))
         XCTAssertNil(parseCommand("focus/0"))
-        XCTAssertNil(parseCommand("focus/10"))
+        XCTAssertNil(parseCommand("focus/100"))
         XCTAssertNil(parseCommand("focus/-1"))
+        XCTAssertNil(parseCommand("focus/1x"))
+        XCTAssertNil(parseCommand("focus/٣"), "digits the window list will never produce")
     }
 
     /// The wire form and the parser are two halves of one thing.
     func testEveryCommandSurvivesTheRoundTrip() {
         let commands: [HeedCommand] = [
             .toggle, .enable, .disable, .focusStep(1), .focusStep(-1),
-            .focusNumber(1), .focusNumber(9),
+            .focusNumber(1), .focusNumber(9), .focusNumber(23),
         ] + FocusDirection.allCases.map { .focusDirection($0) }
 
         for command in commands {

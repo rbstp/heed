@@ -10,6 +10,7 @@ the way to get those combinations back: Raycast owns the hotkey, Heed claims not
 
 | Command | What it does |
 | --- | --- |
+| Search Windows | Every visible window in one searchable list, with the app it belongs to, its size and its number. Pick one to focus it. |
 | Focus Next / Previous Window | Step through the visible windows, screen by screen from left to right, then left to right within each screen. |
 | Focus Window Left / Right / Above / Below | Move to the nearest window in that direction. Sharing a row or column beats being closer, and the edge is a dead end rather than a wrap. |
 | Focus Window by Number | Jump to a window by its place in that same order. |
@@ -45,5 +46,7 @@ Each command opens a `heed://` URL, which a running Heed handles directly. Nothi
 alongside the extension and no binary is called.
 
 The channel is one way: Heed answers nothing back, so a command reports what it asked for rather
-than what came of it. A command sent to a Heed that is not running launches it, and that first
-command can do nothing while Heed works out which window had focus. The one after it lands.
+than what came of it. A command sent to a Heed that is not running launches it first.
+
+Search Windows is the exception: it runs `Heed --windows`, which reads the windows for itself and
+prints them, so the list is a real answer rather than a fire and forget.

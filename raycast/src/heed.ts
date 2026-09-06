@@ -1,6 +1,6 @@
 import { closeMainWindow, getApplications, open, showHUD } from "@raycast/api";
 
-const bundleID = "io.github.rbstp.heed";
+export const bundleID = "io.github.rbstp.heed";
 
 /// Ask the running Heed for something. The vocabulary is Heed's own: `focus/next`, `toggle`.
 ///

@@ -62,7 +62,10 @@ private func parseFocus(_ what: String) -> HeedCommand? {
         break
     }
     if let direction = FocusDirection(rawValue: what) { return .focusDirection(direction) }
-    guard what.count == 1, let number = Int(what), (1...9).contains(number) else { return nil }
+    // Past 9 as well: the shortcuts stop at the digit keys, a window picked from a list does not.
+    guard what.allSatisfy(\.isNumber), let number = Int(what), (1...99).contains(number) else {
+        return nil
+    }
     return .focusNumber(number)
 }
 

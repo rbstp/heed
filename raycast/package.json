@@ -22,6 +22,13 @@
   ],
   "commands": [
     {
+      "name": "search-windows",
+      "title": "Search Windows",
+      "subtitle": "Heed",
+      "description": "List every visible window in Heed's spatial order and focus one.",
+      "mode": "view"
+    },
+    {
       "name": "focus-next",
       "title": "Focus Next Window",
       "subtitle": "Heed",

@@ -8,8 +8,8 @@ func accessibilityTrusted(prompt: Bool) -> Bool {
     return AXIsProcessTrustedWithOptions([key: prompt] as CFDictionary)
 }
 
-let usage = "usage: Heed [--probe [X Y]] [--toggle] [--on] [--off] "
-    + "[--focus next|previous|left|right|up|down|1-9]\n"
+let usage = "usage: Heed [--probe [X Y]] [--windows] [--toggle] [--on] [--off] "
+    + "[--focus next|previous|left|right|up|down|<number>]\n"
 
 let agent = Agent()
 
@@ -17,6 +17,12 @@ let agent = Agent()
 if let flag = CommandLine.arguments.firstIndex(of: "--probe") {
     let rest = CommandLine.arguments.dropFirst(flag + 1).prefix(2).compactMap(Double.init)
     agent.probe(at: rest.count == 2 ? CGPoint(x: rest[0], y: rest[1]) : nil)
+    exit(0)
+}
+
+// `--windows` prints the focus ring as JSON and exits, for anything driving Heed from outside.
+if CommandLine.arguments.contains("--windows") {
+    agent.listWindows()
     exit(0)
 }
 

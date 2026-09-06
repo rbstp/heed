@@ -118,6 +118,8 @@ open 'heed://focus/3'
 open 'heed://toggle'      # also enable, disable
 ```
 
+Window numbers past 9 work here even though the shortcuts stop at the digit keys.
+
 The same vocabulary as flags on the installed binary:
 
 ```sh
@@ -126,13 +128,24 @@ The same vocabulary as flags on the installed binary:
 ~/Applications/Heed.app/Contents/MacOS/Heed --on
 ```
 
+`--windows` prints the focus ring as JSON, in the order the numbered shortcuts count, so something
+else can show the list and pick from it:
+
+```sh
+~/Applications/Heed.app/Contents/MacOS/Heed --windows
+```
+
+It reads the windows for itself rather than asking the running agent, so it answers whether or not
+Heed is running, and it needs the same Accessibility permission.
+
 ### With Raycast
 
 Raycast already tiles and switches windows; Heed adds the pointer. Give Raycast the hotkey and let
 Heed claim nothing.
 
-There is a Raycast extension in [`raycast/`](raycast/) with a command for each of these, so the
-hotkey is Raycast's and Heed claims nothing. Until it is in the store, run it from a checkout:
+There is a Raycast extension in [`raycast/`](raycast/): a searchable window list, plus a command
+for each of these, so the hotkey is Raycast's and Heed claims nothing. Until it is in the store,
+run it from a checkout:
 
 ```sh
 cd raycast && npm install && npm run dev
@@ -167,6 +180,8 @@ Heed follows the pointer but avoids the common focus fights:
 - Floating panels and other transient windows are not pointer focus targets.
 - The focus shortcuts cycle visible windows in spatial order, not stacking order, so stepping through
   them does not reorder the cycle.
+- A focus shortcut with nothing to step from, which happens on a cold start driven by a URL, steps
+  from the window under the pointer.
 - Directional focus never wraps: running out of windows in a direction does nothing.
 - With `warpPointer` on, the pointer follows keyboard-driven focus into the new window, and the
   window it lands in holds focus until the pointer leaves it.

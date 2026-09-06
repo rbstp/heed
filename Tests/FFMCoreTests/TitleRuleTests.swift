@@ -3,7 +3,6 @@ import XCTest
 
 final class TitleRuleTests: XCTestCase {
     private let outlook = "com.microsoft.Outlook"
-    /// The shipped rule for Outlook's meeting reminder panel.
     private let reminderPattern = "^[0-9]+ (Reminders?|rappels?)$"
 
     private func rules(_ pairs: [(String?, String)]) -> [TitleRule] {
@@ -17,8 +16,7 @@ final class TitleRuleTests: XCTestCase {
         XCTAssertTrue(titleIsExcluded("12 Reminders", bundleID: outlook, rules: r))
     }
 
-    /// The whole reason the pattern is anchored. An email about a reminder is an ordinary window and
-    /// must stay focusable -- a substring match on "Reminder" would silently break it.
+    /// The pattern is anchored so an email about a reminder stays focusable.
     func testDoesNotMatchAnEmailWhoseSubjectMentionsReminders() {
         let r = rules([(outlook, reminderPattern)])
         for title in [
@@ -36,7 +34,6 @@ final class TitleRuleTests: XCTestCase {
         }
     }
 
-    /// The title follows Outlook's locale, so the shipped rule carries the French titles too.
     func testMatchesOutlookReminderPanelInFrench() {
         let r = rules([(outlook, reminderPattern)])
         XCTAssertTrue(titleIsExcluded("1 rappel", bundleID: outlook, rules: r))

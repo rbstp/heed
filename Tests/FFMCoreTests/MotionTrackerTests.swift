@@ -12,8 +12,7 @@ final class MotionTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.total, 6)
     }
 
-    /// Old movement must age out, or a single flick would keep the pointer looking "in motion"
-    /// indefinitely and defeat the guard.
+    /// A single flick must not keep the pointer looking "in motion" indefinitely.
     func testForgetsMovementOlderThanTheWindow() {
         var tracker = MotionTracker(capacity: 3)
         tracker.record(100)
@@ -27,8 +26,7 @@ final class MotionTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.total, 0)
     }
 
-    /// A slow deliberate crossing moves only a pixel or two per tick, which is exactly why the
-    /// window exists: over five ticks it still clears a small threshold.
+    /// A slow crossing moves a pixel or two per tick; over the window it still clears a threshold.
     func testSlowDeliberateMovementAccumulates() {
         var tracker = MotionTracker(capacity: 5)
         for _ in 0..<5 { tracker.record(2) }
@@ -40,6 +38,14 @@ final class MotionTrackerTests: XCTestCase {
         tracker.record(50)
         tracker.reset()
         XCTAssertEqual(tracker.total, 0)
+    }
+
+    func testNonFiniteMovementCountsAsNone() {
+        var tracker = MotionTracker(capacity: 3)
+        tracker.record(.nan)
+        tracker.record(.infinity)
+        tracker.record(4)
+        XCTAssertEqual(tracker.total, 4)
     }
 
     func testCapacityIsAtLeastOne() {

@@ -1,17 +1,9 @@
-# Heed -- build, package, install.
-#
-# The app is ad-hoc signed because there is no code-signing identity on this machine. That has one
-# consequence worth knowing before you wonder why things broke: an ad-hoc signature is tied to the
-# exact binary, so every rebuild is a different identity as far as TCC is concerned, and the
-# Accessibility grant does not carry over. `make reset-permission` clears the stale grant so macOS
-# asks again. See README.md.
+# Heed -- build, package, install. See README.md.
 
 BUNDLE_ID   := io.github.rbstp.heed
 CERT_NAME   := Heed Local Signing
 APP_NAME    := Heed
-# The latest release tag, so a source build stamps the version it derives from rather than a
-# constant that goes stale; the release workflow overrides it on the command line. 0.0.0 when no
-# tag is reachable (a fresh shallow clone, as in CI).
+# Latest tag, or 0.0.0 when none is reachable (a shallow CI clone). The release workflow overrides it.
 VERSION     := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 ifeq ($(VERSION),)
 VERSION     := 0.0.0
@@ -23,13 +15,8 @@ EXECUTABLE  := $(APP)/Contents/MacOS/$(APP_NAME)
 AGENT_PLIST := $(HOME)/Library/LaunchAgents/$(BUNDLE_ID).plist
 LOG         := $(HOME)/Library/Logs/heed.log
 DOMAIN      := gui/$(shell id -u)
-# Resolved to the certificate's hash, not its name, and empty when it is not found.
-#
-# Matching a name is ambiguous once two identities share one, and the previous version collapsed any
-# failure -- locked keychain, missing tool, ambiguous match -- into ad-hoc signing, which silently
-# recreated the permission loss the certificate exists to prevent. Signing now refuses rather than
-# quietly degrading; ADHOC=1 forces ad-hoc on purpose -- even when the certificate exists, so a
-# local check-package or dist exercises exactly what CI ships.
+# The certificate's hash, or empty: not found, but also a locked keychain or a missing tool.
+# Signing refuses rather than silently going ad-hoc; ADHOC=1 forces ad-hoc on purpose.
 SIGN_ID     := $(shell security find-identity -v -p codesigning 2>/dev/null \
                  | grep -F '"$(CERT_NAME)"' | head -1 | awk '{print $$2}')
 ifeq ($(ADHOC),1)
@@ -40,8 +27,7 @@ CODESIGN_ID := $(if $(SIGN_ID),$(SIGN_ID),-)
 SIGNED_BY   := $(if $(SIGN_ID),$(CERT_NAME),ad-hoc)
 endif
 
-# The generated plists are built with sed, which cannot be trusted with these characters. Refuse
-# rather than emit a corrupt plist that fails in some confusing way later.
+# sed cannot be trusted with these characters in the generated plists.
 define check_paths
 @case '$(EXECUTABLE)$(LOG)' in \
 	*['&|<>']*) echo "a path contains a character that would corrupt the plists: $(EXECUTABLE)"; \
@@ -66,13 +52,10 @@ build:
 test:
 	swift test
 
-## Render the app icon at every size the iconset needs.
-##
-## Generated rather than committed, so the artwork stays reviewable as code. The renderer switches to
-## a head-on cube below 32px, where an isometric one collapses into a green ring.
+## Render the iconset from code; below 32px the renderer switches to a head-on cube.
 icon: $(ICNS)
 
-# Depends on the Makefile too: it defines the size/name matrix, so changing that must rebuild.
+# The Makefile defines the size matrix, so it is a dependency too.
 $(ICNS): $(ICON_SRC) Makefile
 	@rm -rf .build/$(APP_NAME).iconset
 	@mkdir -p .build/$(APP_NAME).iconset
@@ -84,7 +67,7 @@ $(ICNS): $(ICON_SRC) Makefile
 	iconutil -c icns .build/$(APP_NAME).iconset -o $(ICNS)
 	@echo "built $(ICNS)"
 
-## Assemble and sign the .app in place under $(INSTALL_DIR).
+## Assemble and sign the .app under $(INSTALL_DIR).
 bundle: build $(ICNS)
 	@if [ -z "$(SIGN_ID)" ] && [ "$(ADHOC)" != "1" ]; then \
 		echo "no code-signing identity named \"$(CERT_NAME)\" was found. Either:"; \
@@ -105,8 +88,8 @@ bundle: build $(ICNS)
 	codesign --force --sign "$(CODESIGN_ID)" --identifier "$(BUNDLE_ID)" "$(APP)"
 	@echo "built $(APP), signed by $(SIGNED_BY)"
 
-# install-agent runs from the recipe rather than as a second prerequisite: as prerequisites they are
-# independent, so `make -j install` could bootstrap the agent before the bundle existed.
+# install-agent runs from the recipe: as a prerequisite, `make -j` could bootstrap it before the
+# bundle existed.
 install: bundle
 	@$(MAKE) --no-print-directory install-agent
 	@echo
@@ -114,11 +97,7 @@ install: bundle
 	@echo "System Settings > Privacy & Security > Accessibility."
 	@echo "It is picked up automatically -- no restart needed. Watch it with: make logs"
 
-## Load the login agent. Written with absolute paths; launchd does not expand ~ .
-##
-## Regenerated every time rather than treated as a file target dependent on the template: the
-## contents also depend on APP_NAME and $(HOME), so a timestamp comparison against the template
-## alone would happily leave a plist pointing at an app path that no longer exists.
+## Load the login agent. Regenerated every time: the contents depend on APP_NAME and $(HOME).
 install-agent:
 	$(check_paths)
 	mkdir -p "$(HOME)/Library/LaunchAgents"
@@ -127,9 +106,7 @@ install-agent:
 	    -e 's|@LOG@|$(LOG)|g' \
 	    LaunchAgent/agent.plist.in > "$(AGENT_PLIST)"
 	-launchctl bootout $(DOMAIN)/$(BUNDLE_ID) 2>/dev/null
-	@# bootout returns before launchd has finished tearing the job down, and bootstrapping into that
-	@# window fails with "Input/output error" and leaves nothing running at all. Wait for the label
-	@# to actually go before claiming it again.
+	@# bootout returns before the job is gone; bootstrapping into that window fails with EIO.
 	@for i in $$(seq 30); do \
 		launchctl print $(DOMAIN)/$(BUNDLE_ID) >/dev/null 2>&1 || break; \
 		sleep 0.1; \
@@ -143,28 +120,20 @@ restart:
 logs:
 	@touch "$(LOG)"; tail -f "$(LOG)"
 
-## The log is append-only with no rotation: negligible with verbose off, not with it on. Truncated
-## rather than deleted, so the running agent keeps its open handle.
+## Truncated rather than deleted, so the running agent keeps its open handle.
 logs-clear:
 	@: > "$(LOG)"; echo "cleared $(LOG)"
 
-## What does the agent see under the pointer right now? Runs standalone; does not touch the agent.
-## An explicit screen point: make probe X=960 Y=540
+## What the agent sees under the pointer, or at a point: make probe X=960 Y=540
 probe: build
 	@if [ -n "$(X)$(Y)" ] && { [ -z "$(X)" ] || [ -z "$(Y)" ]; }; then \
 		echo "usage: make probe [X=<x> Y=<y>]"; exit 1; \
 	fi
 	@"$(BUILT)" --probe $(X) $(Y)
 
-## Create a self-signed code-signing identity so the Accessibility grant survives rebuilds.
-##
-## Scoped to code signing only, and trusted in the login keychain rather than system-wide, so it
-## cannot vouch for anything else. Remove it with (-t also removes the trust setting, which -c
-## alone leaves behind):
-##   security delete-identity -t -c "$(CERT_NAME)" ~/Library/Keychains/login.keychain-db
-##
-## openssl's own PKCS#12 defaults are rejected by Apple's importer ("MAC verification failed"),
-## hence the explicit legacy PBE and SHA1 MAC.
+## Self-signed identity, trusted in the login keychain only, so the Accessibility grant survives
+## rebuilds. Remove: security delete-identity -t -c "$(CERT_NAME)" ~/Library/Keychains/login.keychain-db
+## Apple's importer rejects openssl's PKCS#12 defaults, hence the legacy PBE and SHA1 MAC.
 cert:
 	@if security find-identity -v -p codesigning 2>/dev/null | grep -q '$(CERT_NAME)'; then \
 		echo "identity \"$(CERT_NAME)\" already present"; \
@@ -190,10 +159,7 @@ cert:
 		echo "created and trusted \"$(CERT_NAME)\" -- now run: make install"; \
 	fi
 
-## Package smoke test: assemble the bundle and the agent plist into a staging directory and check
-## them. Deliberately ad-hoc and staged, so it touches neither the installed app nor launchd, and can
-## therefore run in CI -- where the compile alone would not catch a broken plist, a missing icon or a
-## signature that does not verify.
+## Package smoke test, staged and ad-hoc so it touches neither the installed app nor launchd.
 check-package:
 	@rm -rf "$(STAGE)"
 	@$(MAKE) --no-print-directory bundle ADHOC=1 INSTALL_DIR="$(STAGE)"
@@ -214,11 +180,7 @@ check-package:
 	fi
 	@echo "package checks passed"
 
-## Build the release archive the Homebrew cask downloads, and print its checksum.
-##
-## ditto rather than zip: it preserves the bundle's symlinks and its code signature, which `zip -r`
-## is free to mangle -- and a mangled signature only shows up as a TCC failure on someone else's
-## machine. Staged like check-package, so releasing never touches the installed app.
+## Release archive for the cask. ditto rather than zip: zip can mangle the code signature.
 dist:
 	@rm -rf "$(STAGE)" "$(DIST)"
 	@$(MAKE) --no-print-directory bundle INSTALL_DIR="$(STAGE)"
@@ -232,8 +194,7 @@ reset-permission:
 	tccutil reset Accessibility $(BUNDLE_ID)
 	-launchctl kickstart -k $(DOMAIN)/$(BUNDLE_ID)
 
-## Print the designated requirement, and say what it means for permission surviving a rebuild.
-## codesign emits this line commented ("# designated => ..."), hence the -o rather than an anchor.
+## Print the designated requirement; codesign emits it as a comment, hence -o rather than an anchor.
 requirement:
 	@req=$$(codesign -d -r- "$(APP)" 2>/dev/null | grep -o 'designated =>.*'); \
 	if [ -z "$$req" ]; then \

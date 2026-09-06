@@ -6,14 +6,9 @@ let bundleID = "io.github.rbstp.heed"
 struct Config {
     var enabled = true
     var menuBarIcon = true
-    /// Parsed by `HotkeySpec` in FFMCore, where the parsing is tested. Empty disables it.
     var hotkey = "cmd+ctrl+h"
-    /// Step keyboard focus around the ring of on-screen windows; see `FocusRing` in FFMCore.
-    ///
-    /// Control rather than Shift, which is what the arrows look free with until you remember that
-    /// Cmd-Shift-Left and Cmd-Shift-Right are how a line is selected in every text field on the
-    /// system. A Carbon hotkey consumes the combination, so claiming those would take that away
-    /// everywhere. Cmd-Ctrl matches the toggle, and the pair below is only a default.
+    // Control rather than Shift: Cmd-Shift with the arrows selects a line in every text field, and
+    // a Carbon hotkey takes the combination away system-wide.
     var focusNextHotkey = "cmd+ctrl+right"
     var focusPreviousHotkey = "cmd+ctrl+left"
     var dwellMs = 0
@@ -30,15 +25,11 @@ struct Config {
     var handoverSettleMs = 300
     var requireStandardWindow = true
     var promptGuard = true
-    /// Prompts that hold focus; see PromptRule in FFMCore, where the matching is tested.
     var promptRules: [PromptRule] = []
-    var excludedWindowTitles: [String] = []
-    /// Compiled title rules. See `TitleRule` in FFMCore, where the matching is tested.
     var titleExclusions: [TitleRule] = []
     var verbose = false
     var excludedBundleIDs: Set<String> = []
 
-    /// The tested policy in FFMCore, built from these settings.
     var windowPolicy: WindowPolicy {
         WindowPolicy(
             requireStandardWindow: requireStandardWindow,
@@ -49,20 +40,15 @@ struct Config {
 
     var dwell: Double { Double(dwellMs) / 1000 }
     var poll: Double { Double(pollMs) / 1000 }
-    /// Never faster than `poll`: a "slow" heartbeat that outpaced the fast one would just be more
-    /// wakeups under another name.
+    /// Never faster than `poll`.
     var idlePoll: Double { max(Double(idlePollMs) / 1000, poll) }
     var typingCooldown: Double { Double(typingCooldownMs) / 1000 }
     var clickGrace: Double { Double(clickGraceMs) / 1000 }
     var handoverSettle: Double { Double(handoverSettleMs) / 1000 }
     var verifyTimeout: Double { Double(verifyTimeoutMs) / 1000 }
 
-    /// Apps that must never receive focus from the pointer.
-    ///
-    /// Most of these draw overlays or transient chrome that the pointer would otherwise chase --
-    /// Mission Control and Launchpad are drawn by the Dock, which is why excluding the Dock covers
-    /// them. Raycast and AltTab are here because both put a floating panel under the cursor while
-    /// you are in the middle of using them.
+    /// Overlay and transient-chrome apps the pointer would otherwise chase. Mission Control and
+    /// Launchpad are drawn by the Dock.
     static let builtinExclusions: Set<String> = [
         bundleID,
         "com.apple.dock",
@@ -77,37 +63,19 @@ struct Config {
         "com.lwouis.alt-tab-macos",
     ]
 
-    /// Windows that present as ordinary but are transient chrome, keyed by the app that owns them.
-    ///
-    /// Outlook's meeting reminder is the motivating case, and it is genuinely indistinguishable by
-    /// structure: a 400x146 panel reporting subrole AXStandardWindow and role description "standard
-    /// window", carrying both minimize and zoom buttons. Its one structural difference from a real
-    /// document window -- no AXFullScreenButton -- is useless as a rule, because legitimate
-    /// fixed-size windows lack it too (Calculator, for one). So a targeted title rule it is.
-    ///
-    /// Anchored on the exact titles Outlook uses ("1 Reminder", "3 Reminders"), so an email whose
-    /// subject merely contains the word is unaffected. The title follows the app's locale, so the
-    /// rule covers the locales seen so far -- English and French ("1 rappel") -- and any other
-    /// locale needs an `excludedWindowTitles` entry until it is added here.
+    /// Outlook's meeting reminder is structurally indistinguishable from a document window (subrole
+    /// AXStandardWindow, minimize and zoom buttons), so it is matched on its exact titles. English and
+    /// French only; another locale needs an `excludedWindowTitles` entry.
     static let builtinTitleExclusions: [(bundleID: String?, pattern: String)] = [
         ("com.microsoft.Outlook", "^[0-9]+ (Reminders?|rappels?)$"),
     ]
-    /// The `io.github.rbstp.heed` defaults domain, however this process was started.
-    ///
-    /// Installed in the app bundle, the main bundle identifier already *is* that domain, so
-    /// `.standard` reads it. A suite name must not be used there: Foundation rejects using your own
-    /// bundle identifier as a suite ("does not make sense and will not work") and silently reads
-    /// nothing. Run as a bare binary instead -- `make probe`, or straight out of `.build` -- there is
-    /// no main bundle identifier to go on, and the suite is what finds the same domain.
-    /// Windows that pass every structural check yet are prompts awaiting an answer, keyed on the
-    /// accessibility identifier their developer set. Finder's file-operation window is the
-    /// motivating case: its replace/skip/stop question reports subrole AXStandardWindow, so
-    /// nothing structural marks it, and its title ("Copy") changes with the locale while the
-    /// identifier does not.
+
     static let builtinPromptRules: [PromptRule] = [
         PromptRule(bundleID: "com.apple.finder", identifier: "Progress"),
     ]
 
+    /// Installed, the main bundle identifier already is the domain and a suite name of your own
+    /// bundle identifier is rejected by Foundation. As a bare binary the suite is what finds it.
     static func store() -> UserDefaults {
         if Bundle.main.bundleIdentifier == bundleID {
             return .standard
@@ -122,8 +90,6 @@ struct Config {
 
         let defaults = store()
 
-        /// Clamped to a sane range and logged when clamped: these values are typed by hand into
-        /// `defaults write`, and a stray zero used to be able to park the agent for hours.
         func int(_ key: String, _ current: Int, _ limits: ClosedRange<Int>) -> Int {
             guard defaults.object(forKey: key) != nil else { return current }
             let given = defaults.integer(forKey: key)
@@ -140,15 +106,10 @@ struct Config {
 
         config.enabled = bool("enabled", config.enabled)
         config.menuBarIcon = bool("menuBarIcon", config.menuBarIcon)
-        if let hotkey = defaults.string(forKey: "hotkey") {
-            config.hotkey = hotkey
-        }
-        if let hotkey = defaults.string(forKey: "focusNextHotkey") {
-            config.focusNextHotkey = hotkey
-        }
-        if let hotkey = defaults.string(forKey: "focusPreviousHotkey") {
-            config.focusPreviousHotkey = hotkey
-        }
+        config.hotkey = defaults.string(forKey: "hotkey") ?? config.hotkey
+        config.focusNextHotkey = defaults.string(forKey: "focusNextHotkey") ?? config.focusNextHotkey
+        config.focusPreviousHotkey =
+            defaults.string(forKey: "focusPreviousHotkey") ?? config.focusPreviousHotkey
         config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
         config.pollMs = int("pollMs", config.pollMs, 10...1_000)
         config.idlePollMs = int("idlePollMs", config.idlePollMs, 100...10_000)
@@ -163,19 +124,12 @@ struct Config {
         config.menuGuard = bool("menuGuard", config.menuGuard)
         config.requireStandardWindow = bool("requireStandardWindow", config.requireStandardWindow)
         config.promptGuard = bool("promptGuard", config.promptGuard)
-        if let titles = defaults.stringArray(forKey: "excludedWindowTitles") {
-            config.excludedWindowTitles = titles
-        }
         config.verbose = bool("verbose", config.verbose)
 
-        // Additive: users extend the built-in list rather than having to restate it.
-        if let extra = defaults.stringArray(forKey: "excludedBundleIDs") {
-            config.excludedBundleIDs.formUnion(extra)
-        }
+        config.excludedBundleIDs.formUnion(defaults.stringArray(forKey: "excludedBundleIDs") ?? [])
 
-        // Built-in rules first, then the user's, which apply to every app.
-        var rules: [(bundleID: String?, pattern: String)] = builtinTitleExclusions
-        rules += config.excludedWindowTitles.map { (nil, $0) }
+        let userTitles = defaults.stringArray(forKey: "excludedWindowTitles") ?? []
+        let rules = builtinTitleExclusions + userTitles.map { (bundleID: nil, pattern: $0) }
         config.titleExclusions = rules.compactMap { rule in
             guard let compiled = TitleRule(bundleID: rule.bundleID, pattern: rule.pattern) else {
                 Log.note("ignoring an invalid excludedWindowTitles pattern: \(rule.pattern)")

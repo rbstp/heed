@@ -13,61 +13,45 @@ final class Agent {
     private var config: Config
     private var machine: DwellMachine<Target>
     private var timer: DispatchSourceTimer?
+    private var hangupSource: DispatchSourceSignal?
 
-    /// The menu bar item, the hotkey, and the combination the menu shows for it: the state here
-    /// that belongs to the main thread rather than to `queue`. `syncMenuBar` and `syncHotkey` are
-    /// the hops between the two.
+    // Main thread only; `syncMenuBar` and `syncHotkey` are the hops from `queue`.
     private var menuBar: MenuBarController?
     private var hotkeys: [Hotkey] = []
     private var shortcut: HotkeySpec?
-
-    /// What the timer is currently scheduled at, so retiming is a no-op when nothing changed, and
-    /// when the last tick ran, which is how an idling tick tells that it missed something.
-    private var interval: Double = 0
-    private var lastTickAt: Double = 0
-    /// Main thread only. Mirrors "the loop is idling, wake it", so a mouse event costs one bool test
-    /// rather than a dispatch hop -- and events arrive far faster than the loop ever ticked.
+    /// Mirrors "the loop is idling", so a mouse event costs one bool test rather than a dispatch.
     private var wantsMouseWake = false
     private var mouseMonitor: Any?
     private var observersInstalled = false
 
+    private var interval: Double = 0
+    private var lastTickAt: Double = 0
     private var lastCursor = CGPoint(x: CGFloat.infinity, y: CGFloat.infinity)
     private var pendingInvalidation = false
 
-    /// Recent pointer travel, and the last window accepted as a focus target. Together they
-    /// distinguish the pointer moving onto a window from a window arriving under a still pointer.
     private var motion = MotionTracker(capacity: 5)
+    /// The last window accepted as a focus target.
     private var lastResolved: Target?
-    /// What the pointer is over, whether or not it was allowed to take focus. See `hitTestForFocus`.
+    /// The last window under the pointer, whether or not it was allowed to take focus.
     private var lastPointerWindow: Target?
-    /// Whether the pointer moved on the tick being served, for the guards that run below `tick`.
+    /// False after a reset until a hit test has run: nil then means unknown, not "over nothing".
+    private var pointerWindowKnown = false
+    /// Whether the last hit test answered at all; false during a cooldown or with Accessibility revoked.
+    private var hitTestAnswered = false
     private var pointerMovedThisTick = false
-    /// Whether `noteHandover` discovered a hold on the tick being served. See
-    /// `noteMovingPointerBaseline`, which is the only thing that asks.
     private var handoverNotedThisTick = false
 
-    /// Cached per-app Accessibility elements. Keyed by pid but validated against launch date,
-    /// because pids are recycled and handing a dead element back to the Accessibility API is not
-    /// something to find out about in production.
+    /// Keyed by pid and validated against launch date, because pids are recycled.
     private var appElements: [pid_t: (element: AXUIElement, launched: Date?)] = [:]
-
-    /// Apps that repeatedly failed to answer. Prevents one hung process from costing a messaging
-    /// timeout on every tick.
+    /// Apps that repeatedly failed to answer, so one hung process does not cost a timeout per tick.
     private var blockedUntil: [pid_t: Double] = [:]
     private var failureCounts: [pid_t: Int] = [:]
 
     private var isRunning = false
     private var overlayCached = false
-    private var surveyUntil: Double = 0
-    /// Focus that arrived without the pointer -- a new window, a window raised by a shortcut,
-    /// Cmd-Tab -- and the window the pointer has to leave to overrule it. Fed by `surveyWindows`,
-    /// consulted by `hitTestForFocus`.
+    private var overlayCacheUntil: Double = 0
     private var handover = FocusHandover<Target>(settle: 0)
-    /// Whether the last hit test was withheld by a hold, so verbose mode says so once on entry
-    /// rather than on every tick for as long as the pointer stays put.
     private var holdingFocus = false
-    /// What the last focus-ring step moved away from and aimed at, and when. See `ringStart` in
-    /// FFMCore for what it is for, and `stepFocus` for why it expires.
     private var lastStep: (from: Target?, to: Target)?
     private var lastStepAt: Double = 0
     private var promptCached = false
@@ -75,10 +59,6 @@ final class Agent {
     private var hitTestFailures = 0
     private var hitTestCooldownUntil: Double = 0
     private var accessibilityLost = false
-
-
-    /// Last target named in the log, so verbose mode reports each window once on entry rather than
-    /// 25 times a second while the pointer moves across it.
     private var lastResolvedName: String?
 
     private var now: Double { ProcessInfo.processInfo.systemUptime }
@@ -91,25 +71,18 @@ final class Agent {
 
     // MARK: - Lifecycle
 
-    /// Registration happens here; every mutation of agent state happens on the queue.
-    ///
-    /// Startup used to run on whichever thread called it, which raced with a SIGHUP reload arriving
-    /// on the queue -- two `scheduleTimer()` calls at once, and torn writes to config and motion.
+    /// Every mutation of agent state happens on `queue`.
     func start() {
         observeSystemEvents()
         queue.async { [self] in
             guard !isRunning else { return }
 
-            // Bound every Accessibility message process-wide. Passing the system-wide element sets
-            // the global default rather than a per-element one.
-            //
-            // This bounds each *message*, not a whole tick: a tick issues several. Hence short, and
-            // hence keeping the number of messages per tick down.
+            // Passing the system-wide element sets the process-wide default. Per message, not per
+            // tick, and a tick issues several.
             AXUIElementSetMessagingTimeout(systemWide, 0.1)
 
             isRunning = true
             scheduleTimer()
-            // The icon was dimmed while the Accessibility grant was outstanding; it is not now.
             syncMenuBar()
             Log.note("running: enabled=\(config.enabled) dwell=\(config.dwellMs)ms "
                 + "poll=\(config.pollMs)ms raise=\(config.raise) "
@@ -119,10 +92,10 @@ final class Agent {
         }
     }
 
-    fileprivate func noteDisplayReconfiguration() {
-        queue.async {
-            self.pendingInvalidation = true
-            self.wakeLoop()
+    private func invalidateFromSystemEvent() {
+        queue.async { [self] in
+            pendingInvalidation = true
+            wakeLoop()
         }
     }
 
@@ -132,9 +105,6 @@ final class Agent {
         motion = MotionTracker(capacity: max(2, Int((0.2 / config.poll).rounded())))
         handover.settle = config.handoverSettle
 
-        // Disabled means no timer rather than a tick that wakes 25 times a second to return
-        // immediately. Everything that can flip `enabled` -- the menu bar, a config reload -- comes
-        // back through here, so this is the only place that has to know.
         guard config.enabled else {
             interval = 0
             setMouseWake(false)
@@ -149,11 +119,7 @@ final class Agent {
         retime(to: config.poll, startingNow: false)
     }
 
-    /// Re-aims the timer, and tells the main thread whether a mouse event should wake it.
-    ///
-    /// Idling gets generous leeway on purpose: it lets the system fire this alongside whatever else
-    /// it was going to wake for, which is most of where the saving comes from -- a timer nobody has
-    /// to wake the CPU for costs close to nothing.
+    /// Idling gets generous leeway so the system can coalesce the wakeup with others.
     private func retime(to wanted: Double, startingNow: Bool) {
         guard let timer, wanted != interval else { return }
         interval = wanted
@@ -170,27 +136,28 @@ final class Agent {
         DispatchQueue.main.async { [self] in wantsMouseWake = wanted }
     }
 
-    /// Back to the fast cadence, firing at once rather than at the end of the idle interval: the
-    /// pointer has already moved by the time this runs.
     private func wakeLoop() {
         retime(to: config.poll, startingNow: true)
     }
 
-    /// Forget what the pointer was last resolved to, so the next tick adopts a baseline instead of
-    /// acting on it.
-    ///
-    /// This is what `.invalidating` does inside `tick`, for the two paths that re-evaluate from
-    /// outside it. `machine.invalidate()` alone is not enough and is the more dangerous half: it
-    /// forces a hit test, and a target equal to the surviving `lastResolved` passes the entry-motion
-    /// guard on the strength of a baseline set before the pause. Keyboard focus moved elsewhere in
-    /// the meantime would be dragged back to the window under a pointer that never moved.
+    /// Forget what the pointer was over, so the next tick adopts a baseline instead of acting on it.
+    /// `machine.invalidate()` alone would let a stale `lastResolved` pass the entry guard and drag
+    /// focus back to a window under a pointer that never moved.
     private func forgetTarget() {
         machine.invalidate()
         motion.reset()
         lastResolved = nil
-        // And any hold, which is anchored on a window the pointer may have left long ago.
         lastPointerWindow = nil
+        pointerWindowKnown = false
         handover.reset()
+    }
+
+    /// Observe the pointer at the moment of a reset, so focus handed over right after it is judged
+    /// against a real baseline rather than against nothing.
+    private func seedPointerWindow() {
+        guard config.enabled, let cursor = CGEvent(source: nil)?.location else { return }
+        let target = hitTest(at: cursor)
+        if hitTestAnswered { adoptPointerWindow(target) }
     }
 
     private func reload() {
@@ -199,7 +166,10 @@ final class Agent {
             Log.verbose = config.verbose
             machine.dwell = config.dwell
             forgetTarget()
-            if isRunning { scheduleTimer() }   // pollMs may have changed
+            if isRunning {
+                scheduleTimer()
+                seedPointerWindow()
+            }
             syncMenuBar()
             syncHotkey()
             Log.note("reloaded config: dwell=\(config.dwellMs)ms poll=\(config.pollMs)ms "
@@ -207,11 +177,9 @@ final class Agent {
         }
     }
 
-    // MARK: - Menu bar
+    // MARK: - Menu bar and hotkeys
 
-    /// Installed from the launch path rather than from `start()`, so both are there whether or not
-    /// the Accessibility grant has arrived. The hotkey especially: waiting for a permission you have
-    /// not decided to give yet is exactly when you want to be able to switch this off.
+    /// Installed before the Accessibility gate, so the switch works while the grant is outstanding.
     func installMenuBar() {
         queue.async { [self] in
             syncMenuBar()
@@ -219,27 +187,24 @@ final class Agent {
         }
     }
 
-    /// The click and hotkey handler, and the only thing that changes `enabled` at runtime.
-    ///
-    /// It writes the same defaults key `defaults write` does, so the choice survives a restart and
-    /// the icon and the configuration cannot come to disagree.
+    /// Writes the same defaults key `defaults write` does, so the choice survives a restart.
     func toggleEnabled() {
         queue.async { [self] in
             let value = !config.enabled
             config.enabled = value
             Config.store().set(value, forKey: "enabled")
 
-            // Turning it back on must not act on what the pointer was over minutes ago.
             forgetTarget()
-            if isRunning { scheduleTimer() }
+            if isRunning {
+                scheduleTimer()
+                seedPointerWindow()
+            }
 
             Log.note(value ? "enabled" : "disabled")
             syncMenuBar()
         }
     }
 
-    /// Push the current state into the menu bar. Called on `queue`; the item is main-thread only, so
-    /// the values are read here and applied there.
     private func syncMenuBar() {
         let wanted = config.menuBarIcon
         let enabled = config.enabled
@@ -252,8 +217,6 @@ final class Agent {
             if menuBar == nil {
                 menuBar = MenuBarController(
                     onClick: { [weak self] in self?.toggleEnabled() },
-                    // Not the agent's to do: quitting is about the process and the job launchd
-                    // holds it in, neither of which is state on `queue`.
                     onQuit: { quitHeed() },
                     onChooseModifier: { [weak self] preset in
                         self?.changeModifiers(to: preset) { accepted in
@@ -262,23 +225,15 @@ final class Agent {
                     }
                 )
             }
-            // Set here as well as in syncHotkey, because either can run first.
             menuBar?.shortcut = shortcut
-            // Trust is read here rather than carried across the hop: it can change at any moment,
-            // and it is what decides whether the icon claims to be working.
+            // Read here rather than carried across the hop: trust can change at any moment.
             menuBar?.render(enabled: enabled, trusted: accessibilityTrusted(prompt: false))
         }
     }
 
-    /// The shortcuts Heed registers.
-    ///
-    /// One list, so registering them, changing their modifier and storing them cannot come to
-    /// disagree about what exists.
     private enum Shortcut: CaseIterable {
         case toggle, focusNext, focusPrevious
 
-        /// A third-person verb phrase, so it reads in both the line that says a hotkey works and
-        /// the line that says nothing does.
         var which: String {
             switch self {
             case .toggle: "toggles Heed"
@@ -295,11 +250,11 @@ final class Agent {
             }
         }
 
-        func text(in config: Config) -> String {
+        var keyPath: WritableKeyPath<Config, String> {
             switch self {
-            case .toggle: config.hotkey
-            case .focusNext: config.focusNextHotkey
-            case .focusPrevious: config.focusPreviousHotkey
+            case .toggle: \.hotkey
+            case .focusNext: \.focusNextHotkey
+            case .focusPrevious: \.focusPreviousHotkey
             }
         }
     }
@@ -312,19 +267,18 @@ final class Agent {
         }
     }
 
-    /// Registers every hotkey, replacing any previous one. Called on `queue`; Carbon registration
-    /// belongs to the main thread, so the values are read here and applied there.
+    private var shortcutTexts: [String] {
+        Shortcut.allCases.map { config[keyPath: $0.keyPath] }
+    }
+
+    /// Registers every hotkey, replacing the previous set. Whatever can be had is kept: a
+    /// combination another app holds costs that one shortcut, not the other two.
     private func syncHotkey() {
-        let texts = Shortcut.allCases.map { $0.text(in: config) }
+        let texts = shortcutTexts
         DispatchQueue.main.async { [self] in
-            // Dropping the old ones unregisters them, which is also how a changed combination takes
-            // effect: there is no editing a registration in place.
             hotkeys = []
             adopt(specs: [])
 
-            // Whatever can be had, rather than all or nothing: a combination another app holds
-            // should cost that one shortcut and not the other two. Changing the modifier is the
-            // opposite case, and says so there.
             let claimed = claim(texts)
             hotkeys = claimed.held
             adopt(specs: claimed.specs)
@@ -332,16 +286,9 @@ final class Agent {
         }
     }
 
-    /// Claim a set of combinations *without* giving up whatever is registered now.
-    ///
-    /// The registrations are returned rather than stored, and dropping one unregisters it. That is
-    /// what lets a change be tried before the working shortcuts are given up: Carbon refuses a
-    /// combination another app already holds, and finding that out must not cost the ones that
-    /// were fine.
-    ///
-    /// `specs` is one entry per shortcut, in `Shortcut.allCases` order, nil where nothing was
-    /// registered. `refused` is only about combinations that are taken -- a setting that is empty
-    /// or does not parse asked for nothing, so there was nothing to refuse.
+    /// Claim combinations without releasing the current registrations, so a change can be tried
+    /// before the working shortcuts are given up. `specs` is in `Shortcut.allCases` order; `refused`
+    /// is only about combinations another app holds.
     private func claim(_ texts: [String]) -> (held: [Hotkey], specs: [HotkeySpec?], refused: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
         var held: [Hotkey] = []
@@ -349,11 +296,11 @@ final class Agent {
         var refused = false
 
         for (shortcut, text) in zip(Shortcut.allCases, texts) {
-            let wanted = text.trimmingCharacters(in: .whitespaces)
-            guard !wanted.isEmpty, wanted.lowercased() != "none" else {
+            guard !HotkeySpec.isOff(text) else {
                 specs.append(nil)
                 continue
             }
+            let wanted = text.trimmingCharacters(in: .whitespaces)
             guard let spec = HotkeySpec(wanted) else {
                 Log.note("hotkey \"\(wanted)\" is not a combination I understand "
                     + "(try cmd+ctrl+h); nothing \(shortcut.which)")
@@ -362,7 +309,7 @@ final class Agent {
             }
             guard let registered = Hotkey(spec: spec, action: action(for: shortcut)) else {
                 specs.append(nil)
-                refused = true   // Hotkey logs why
+                refused = true
                 continue
             }
             held.append(registered)
@@ -371,11 +318,6 @@ final class Agent {
         return (held, specs, refused)
     }
 
-    /// Say what is registered, once it is going to be kept.
-    ///
-    /// Not from inside `claim`, which is also used to *try* a set that may be given up a moment
-    /// later: announcing those would put two combinations in the log that were unregistered before
-    /// anyone could press them.
     private func announce(specs: [HotkeySpec?]) {
         for (shortcut, spec) in zip(Shortcut.allCases, specs) {
             guard let spec else { continue }
@@ -383,33 +325,21 @@ final class Agent {
         }
     }
 
-    /// Tell the menu bar what is registered. Main thread; `specs` is in `Shortcut.allCases` order.
     private func adopt(specs: [HotkeySpec?]) {
         shortcut = specs.first.flatMap { $0 }
         menuBar?.shortcut = shortcut
-        // From whichever shortcut actually has one, so the menu still shows the modifier in force
-        // when the toggle in particular has been switched off.
         menuBar?.modifiers = specs.compactMap { $0 }.first?.modifiers
     }
 
-    /// Put every shortcut under a different modifier, keeping each one's key.
-    ///
-    /// All of them or none, and only stored if it took. Half-applying a modifier would leave the
-    /// menu showing one combination while another was registered, and the shortcuts under two
-    /// different modifiers is not a state anybody asked for.
-    ///
-    /// `report` is called on the main thread, with whether it took, so the menu bar can say so.
+    /// Put every shortcut under a different modifier, keeping each key. All or none, and stored only
+    /// once it took. `report` is called on the main thread.
     func changeModifiers(to preset: ModifierPreset, report: @escaping (Bool) -> Void) {
         queue.async { [self] in
-            let current = Shortcut.allCases.map { $0.text(in: config) }
+            let current = shortcutTexts
             let texts = current.map { rewriteHotkey($0, modifiers: preset.modifiers) }
 
-            // Compared as combinations and not as text. What is stored is however somebody wrote it
-            // -- "cmd+ctrl+h" -- and what comes back from `rewriteHotkey` is canonical --
-            // "ctrl+cmd+h" -- so the very same chord reads as a change if the strings are compared.
-            // And claiming a combination this process already holds is refused by Carbon, which
-            // would report a failure for the one case that cannot fail: choosing the modifier that
-            // is already ticked.
+            // Compared as combinations: the stored text is however it was typed, the rewrite is
+            // canonical, and Carbon refuses a combination this process already holds.
             guard !zip(current, texts).allSatisfy({ HotkeySpec($0) == HotkeySpec($1) }) else {
                 DispatchQueue.main.async { report(true) }
                 return
@@ -418,24 +348,17 @@ final class Agent {
             DispatchQueue.main.async { [self] in
                 let claimed = claim(texts)
                 guard !claimed.refused else {
-                    // `claimed.held` goes out of scope here, which unregisters the partial set. The
-                    // working ones were never released, so there is nothing to put back.
                     Log.note("keeping the current shortcuts: \(preset.display) is not free")
                     report(false)
                     return
                 }
-                hotkeys = claimed.held   // releases the old ones
+                hotkeys = claimed.held
                 adopt(specs: claimed.specs)
                 announce(specs: claimed.specs)
 
                 queue.async { [self] in
-                    // The configuration is read on this queue and applied on the main one, so it
-                    // can have moved on in between -- a SIGHUP reload is the way that happens. Its
-                    // reading is the newer one, and storing a modifier chosen against a
-                    // configuration that is already gone would leave what is registered and what is
-                    // stored describing different shortcuts until the next restart. Put the
-                    // registrations back in step with it instead, and say the change did not take.
-                    guard Shortcut.allCases.map({ $0.text(in: config) }) == current else {
+                    // A SIGHUP reload can have changed the configuration in between; it wins.
+                    guard shortcutTexts == current else {
                         Log.note("the configuration changed while \(preset.display) was being "
                             + "applied; keeping what it says instead")
                         syncHotkey()
@@ -446,13 +369,9 @@ final class Agent {
                     let store = Config.store()
                     for (shortcut, text) in zip(Shortcut.allCases, texts) {
                         store.set(text, forKey: shortcut.defaultsKey)
+                        config[keyPath: shortcut.keyPath] = text
                     }
-                    config.hotkey = texts[0]
-                    config.focusNextHotkey = texts[1]
-                    config.focusPreviousHotkey = texts[2]
                     Log.note("shortcuts now use \(preset.display)")
-                    // Reported only once it is stored, so the icon is answering for the change that
-                    // actually happened rather than for the registration alone.
                     DispatchQueue.main.async { report(true) }
                 }
             }
@@ -467,58 +386,32 @@ final class Agent {
         let sinceLastTick = lastTickAt > 0 ? now - lastTickAt : 0
         lastTickAt = now
 
-        // A circuit-breaker block expiring changes what is focusable, but nothing moves the pointer
-        // to announce it. Without re-arming here, a stationary pointer over a recovered app would
-        // never hit-test again: the forced test that `noteFailure` armed was already spent on the
-        // tick that found the app still blocked.
+        // Deadlines of our own change what is focusable with nothing to announce it, so each one
+        // re-arms a hit test as it expires.
         if let soonest = blockedUntil.values.min(), now >= soonest {
             blockedUntil = blockedUntil.filter { $0.value > now }
             machine.invalidate()
         }
-
-        // And the hit-test cooldown, for the same reason: it was spending its two seconds waiting
-        // for a deadline and then never performing the retry it waited for.
         if hitTestCooldownUntil > 0, now >= hitTestCooldownUntil {
             hitTestCooldownUntil = 0
             machine.invalidate()
         }
-
-        // A contested hold is a deadline like the others above: the pointer has arrived on some
-        // other window and is waiting out the settle, and once it stops moving nothing performs the
-        // hit test that would notice the settle lapse. Bounded by the settle itself, so this keeps
-        // the loop awake for a fraction of a second rather than for as long as focus is held.
         if handover.isSettling { machine.invalidate() }
 
-        // Same problem, and the reason idling is not simply "wake on mouse events".
-        //
-        // A whole suppression can begin and end between two heartbeats: press Cmd-Tab with the
-        // pointer parked, and the command held, the keystroke and its cooldown are all over before
-        // the next one. The 40ms loop always saw that and armed a hit test; an idling loop sees a
-        // quiet `.normal` tick and would leave focus wherever the keyboard put it, sometimes -- and
-        // "sometimes" is the worst of the options, since it depends on where the heartbeat landed.
-        //
-        // Watching the keyboard for it is the obvious fix and the wrong one: a global key monitor
-        // is a second permission and a shape this program should not have. So the question is asked
-        // backwards instead -- is any input newer than our last tick? -- which needs no monitor and
-        // covers every kind of input at once.
-        if sinceLastTick > config.poll * 2, secondsSinceAny(of: suppressingInputs) < sinceLastTick {
+        // A whole suppression (Cmd-Tab and its cooldown) can begin and end between two heartbeats.
+        // Asking whether any input is newer than the last tick needs no key monitor.
+        if sinceLastTick > config.poll * 2, secondsSinceAny(of: Agent.suppressingInputs) < sinceLastTick {
             Log.debug("input arrived while idling; re-deriving")
             machine.invalidate()
         }
 
         let cursor = CGEvent(source: nil)?.location ?? lastCursor
         let moved = cursor != lastCursor
-        let step = lastCursor.x.isFinite
-            ? Double(hypot(cursor.x - lastCursor.x, cursor.y - lastCursor.y))
-            : 0
-        motion.record(step.isFinite ? step : 0)
+        motion.record(lastCursor.x.isFinite ? hypot(cursor.x - lastCursor.x, cursor.y - lastCursor.y) : 0)
         lastCursor = cursor
         pointerMovedThisTick = moved
 
-        // Before anything else acts this tick. A handover has to be noticed before the machine gets
-        // a chance to undo it: a forced hit test in this same tick would otherwise take focus
-        // straight back, and then focus *would* be on the pointer's window, so there would be
-        // nothing left to notice.
+        // Before the machine can undo it: a forced hit test this tick would take focus straight back.
         noteHandover()
 
         let condition = currentCondition(cursorMoved: moved)
@@ -535,28 +428,20 @@ final class Agent {
             isAlreadyFocused: { self.focusMatches($0) }
         )
 
-        // Every return below leaves the cadence to this, so a tick cannot exit and forget to.
         defer { retime(to: hasPendingWork(cursorMoved: moved) ? config.poll : config.idlePoll,
                        startingNow: false) }
 
         guard let target else { return }
 
-        // Revalidate before acting, even at instant dwell. Time passes regardless of the dwell
-        // setting: resolving the window and checking current focus are several cross-process calls,
-        // and the window can close, quit, minimize, move or change Space during them. Acting on the
-        // stale reference could make a window-less app frontmost.
+        // Time passes regardless of dwell: the window can close, minimize or move during the reads.
         guard let confirmed = hitTest(at: cursor), confirmed == target else {
             Log.debug("target changed before it could be focused; discarding \(target.describedAs)")
             machine.invalidate()
             return
         }
 
-        // The pointer must not bury a question. While a prompt awaits an answer in the frontmost
-        // app -- Finder asking whether to replace the file just dropped -- focus moves nowhere:
-        // stealing it would raise another window over the prompt, and a buried prompt can never be
-        // reached by pointer again, because the hit test resolves whatever covers it. Going through
-        // invalidate() keeps retrying, so the window under the resting pointer still takes focus
-        // the moment the question is answered.
+        // Stealing focus would raise another window over the prompt, and a buried prompt can never
+        // be reached by pointer again.
         if config.promptGuard, frontmostPromptAwaitsAnswer() {
             Log.debug("not focusing \(confirmed.describedAs): a prompt awaits an answer "
                 + "in the frontmost app")
@@ -565,28 +450,16 @@ final class Agent {
         }
 
         if !applyFocus(to: confirmed) {
-            // Re-arm so a stationary pointer still gets another attempt; going through invalidate()
-            // means the next attempt re-derives the target rather than reusing this reference.
             machine.invalidate()
         }
     }
 
-    /// Whether anything can still change without new input from outside.
-    ///
-    /// False means the pointer is parked, no dwell or forced hit test is outstanding, and no timer
-    /// of our own is due -- so ticking 25 times a second only proves the pointer is still parked. A
-    /// mouse event wakes it again, and the idle heartbeat is the safety net for anything that never
-    /// sends one.
+    /// Whether anything can still change without new input, so the loop can drop to the heartbeat.
     private func hasPendingWork(cursorMoved: Bool) -> Bool {
         if cursorMoved || pendingInvalidation || machine.needsTick { return true }
         if now < hitTestCooldownUntil { return true }
-        // A hold being contested has to be counted here even though the forced hit test that
-        // advances it is already spent by now: `machine.needsTick` is asked after `machine.tick`
-        // consumed it, so relying on that dropped the loop to the heartbeat mid-settle and turned a
-        // 300ms settle into a second and a half.
+        // Asked after `machine.tick` spent the forced test, so the settle has to be counted here.
         if handover.isSettling { return true }
-        // A block expiring changes what is focusable with nothing to announce it, and `tick` relies
-        // on being there to notice.
         if let soonest = blockedUntil.values.min(), soonest > now { return true }
         return false
     }
@@ -600,39 +473,28 @@ final class Agent {
             return .invalidating
         }
 
-        // One call covering every button, rather than polling each button index separately. This is
-        // an instantaneous snapshot, which Apple documents as unsuitable for tracking, so the grace
-        // period below covers presses it cannot see.
+        // An instantaneous snapshot; the grace period covers presses it cannot see.
         if NSEvent.pressedMouseButtons != 0 { return .suppressing }
 
-        // A click can begin and end entirely between two polls, and a click is a deliberate focus
-        // choice that the pointer should not immediately override. Short, because unlike typing this
-        // is only closing a sampling gap.
-        if config.clickGraceMs > 0, secondsSinceAny(of: deliberateMouseEvents) < config.clickGrace {
+        if config.clickGraceMs > 0, secondsSinceAny(of: Agent.deliberateMouseEvents) < config.clickGrace {
             return .suppressing
         }
 
-        // Typing must win over the pointer. Without this, resting the pointer over another window
-        // while typing sends the rest of the sentence somewhere else -- the worst thing this tool
-        // could do.
         if config.typingCooldownMs > 0,
            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
             < config.typingCooldown {
             return .suppressing
         }
 
-        // A password field makes an unwanted focus change more dangerous, not less.
         if IsSecureEventInputEnabled() { return .suppressing }
 
         if config.ignoreWhenCommandHeld,
            CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand) {
-            return .suppressing   // Cmd-Tab in progress
+            return .suppressing
         }
 
-        // Only worth a round trip while something is actually pending -- which includes a hit test
-        // armed by the previous tick. Keyed on `hasCandidate` alone, a suppressing tick cleared the
-        // candidate and the next tick stopped checking, so the still-open menu was no longer seen
-        // and the armed test could move focus underneath it.
+        // Only worth a round trip while something is pending, including a hit test armed by the
+        // previous tick.
         if config.menuGuard, cursorMoved || machine.needsTick, overlayPresent() {
             return .suppressing
         }
@@ -640,17 +502,14 @@ final class Agent {
         return .normal
     }
 
-    /// Releases as well as presses: the grace after a drag has to start at the drop, not at the
-    /// grab, or a long drag exhausts it before the release even happens.
-    private let deliberateMouseEvents: [CGEventType] = [
+    /// Releases as well as presses, so the grace after a drag starts at the drop.
+    private static let deliberateMouseEvents: [CGEventType] = [
         .leftMouseDown, .rightMouseDown, .otherMouseDown,
         .leftMouseUp, .rightMouseUp, .otherMouseUp,
     ]
 
-    /// Every input that can start a suppression, so an idling tick can tell whether one ran its
-    /// course while the loop was not looking. `flagsChanged` is in here for Cmd-Tab, which can
-    /// begin and end without a single keyDown reaching this list.
-    private lazy var suppressingInputs: [CGEventType] = deliberateMouseEvents + [
+    /// Every input that can start a suppression; `flagsChanged` covers a Cmd-Tab with no keyDown.
+    private static let suppressingInputs: [CGEventType] = deliberateMouseEvents + [
         .keyDown, .flagsChanged,
     ]
 
@@ -660,84 +519,84 @@ final class Agent {
         }
     }
 
-    /// True when a menu, popover, drag image or similar transient overlay is on screen.
-    ///
-    /// Detected by window level rather than by sampling the focused element, because while a
-    /// pointer-driven menu is open the focused element can still report the control underneath it.
-    /// The upper bound excludes the cursor's own window, which sits far above everything.
+    /// Whether a menu, popover or drag image is on screen, judged by window level: while a menu is
+    /// open the focused element can still report the control underneath it. Cached briefly, since
+    /// enumerating windows is a window server round trip.
     private func overlayPresent() -> Bool {
-        surveyWindows()
+        if now < overlayCacheUntil { return overlayCached }
+        overlayCacheUntil = now + 0.1
+
+        // Pop-up menus through drag images. Higher levels hold always-present assistive windows.
+        let levels = Int(CGWindowLevelForKey(.popUpMenuWindow))..<Int(CGWindowLevelForKey(.screenSaverWindow))
+        let overlay = onScreenWindows().first { levels.contains($0.level) && $0.pid != ownPid }
+        if let overlay {
+            Log.debug("suppressed: overlay on screen (\(overlay.owner ?? "?") at level \(overlay.level))")
+        }
+        overlayCached = overlay != nil
         return overlayCached
     }
 
-    /// Enumerating every on-screen window is a Window Server round trip, so hold the answer for a
-    /// moment rather than repeating it on consecutive ticks of the same gesture.
-    private func surveyWindows() {
-        if now < surveyUntil { return }
-        surveyUntil = now + 0.1
+    // MARK: - Window server
 
-        // Menus and popovers through drag images, and no further. An earlier upper bound of 2000
-        // swept in the screen-saver and assistive-technology levels, where a single always-present
-        // accessibility or HUD window would have disabled focus-follows-mouse globally and silently.
-        let lower = Int(CGWindowLevelForKey(.popUpMenuWindow))    // 101
-        let upper = Int(CGWindowLevelForKey(.screenSaverWindow))  // 1000
-        var found = false
+    private struct ListedWindow {
+        let number: Int
+        let pid: pid_t
+        let level: Int
+        let frame: CGRect
+        let owner: String?
+    }
 
-        if let windows = CGWindowListCopyWindowInfo(
+    /// What is on screen in this Space, front to back. Decoded lazily, so a search stops early.
+    private func onScreenWindows() -> some Sequence<ListedWindow> {
+        let listed = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] {
-            for window in windows {
-                guard let level = window[kCGWindowLayer as String] as? Int,
-                      level >= lower, level < upper,
-                      (window[kCGWindowOwnerPID as String] as? pid_t) != ownPid
-                else { continue }
-                let owner = window[kCGWindowOwnerName as String] as? String ?? "?"
-                Log.debug("suppressed: overlay on screen (\(owner) at level \(level))")
-                found = true
-                break
-            }
+        ) as? [[String: Any]] ?? []
+        return listed.lazy.compactMap { window -> ListedWindow? in
+            guard let number = window[kCGWindowNumber as String] as? Int,
+                  let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+                  let level = window[kCGWindowLayer as String] as? Int,
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
+            else { return nil }
+            return ListedWindow(number: number, pid: pid, level: level, frame: frame,
+                                owner: window[kCGWindowOwnerName as String] as? String)
         }
-        overlayCached = found
+    }
+
+    /// The displays, in the top-left-origin space Accessibility uses. `NSScreen` is main-thread only.
+    private func screenFrames() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
+
+        // Mirrored displays report identical bounds.
+        var frames: [CGRect] = []
+        for id in ids.prefix(Int(count)) {
+            let bounds = CGDisplayBounds(id)
+            if !frames.contains(bounds) { frames.append(bounds) }
+        }
+        return frames
     }
 
     // MARK: - Hit testing
 
-    /// The hit test used to drive focus, with the entry guard applied.
-    ///
-    /// Focus follows the pointer, not the other way round. A window that appears or is raised
-    /// underneath a pointer that is sitting still has not been "moved onto", and focusing it means
-    /// a pop-up, or an app raising itself, can take focus without the user doing anything. So a
-    /// change of target is only accepted when the pointer has actually travelled recently.
-    ///
-    /// The raw `hitTest` stays unguarded: `--probe` and the pre-apply revalidation both need to see
-    /// what is genuinely under the pointer, not what is eligible.
+    /// The hit test that drives focus, with the handover and entry guards applied. A window that
+    /// appears under a still pointer has not been moved onto.
     private func hitTestForFocus(at point: CGPoint) -> Target? {
-        guard let target = hitTest(at: point) else {
-            // Nothing resolvable under the pointer: the window closed, the pointer reached the
-            // desktop, an app stopped answering. Any contest in progress is over -- left standing it
-            // would keep the loop forcing hit tests for a settle that can never complete.
+        let target = hitTest(at: point)
+        guard let target else {
             handover.abandonContest()
-            // While moving across a menu bar, the Dock, or a gap between windows, keep the last
-            // focusable window as the baseline. Menu-opened windows arrive during exactly this gap:
-            // erasing it here left no evidence that Zen's About window had taken key focus, and the
-            // underlying browser window was focused again as soon as the menu closed. Once the
-            // pointer is stationary, nil is a real observation and replaces the old baseline.
-            if !pointerMovedThisTick {
-                lastPointerWindow = nil
+            // Crossing the menu bar, the Dock or a gap keeps the last window as the baseline; only a
+            // stationary, answered nil is a real observation.
+            if hitTestAnswered, !pointerMovedThisTick {
+                adoptPointerWindow(nil)
             }
             return nil
         }
-        // What the pointer is over, as opposed to `lastResolved`, which is what was last *accepted*
-        // as a focus target. They part company exactly when a hold is in force, and the handover
-        // needs the former: a hold armed while the pointer sits on B must be anchored on B, not on
-        // wherever focus was last allowed to follow.
-        lastPointerWindow = target
+        adoptPointerWindow(target)
         noteMovingPointerBaseline(window: target)
 
-        // Ahead of the entry-motion guard below, which cannot see this case: nothing about the
-        // target changed -- the pointer is resting on the window it was already resting on, so
-        // there is no arrival to reject. What changed is that focus was handed somewhere else, and
-        // a pointer that has not moved since is not a request to take it back.
         switch handoverDecision(for: target) {
         case .hold:
             if !holdingFocus {
@@ -747,8 +606,6 @@ final class Agent {
             }
             return nil
         case .entered:
-            // The entry guard below is answered already: the handover watched the pointer travel
-            // here and stay, which is more than recent motion can still show by now.
             holdingFocus = false
             Log.debug("settled on \(target.describedAs); following the pointer again")
             lastResolved = target
@@ -759,18 +616,12 @@ final class Agent {
 
         if config.entryMotionPx > 0, motion.total < Double(config.entryMotionPx) {
             guard let previous = lastResolved else {
-                // Just started, or just invalidated by a Space change or display reconfiguration.
-                // Adopt whatever is under the pointer as the baseline rather than focusing it: the
-                // pointer has not moved, so nothing has been entered. Without this, at the default
-                // instant dwell, launching the agent stole focus to whatever the pointer happened to
-                // be resting on.
                 lastResolved = target
                 Log.debug("baseline \(target.describedAs): not focusing without pointer movement")
                 return nil
             }
             if previous != target {
-                // Deliberately does not update the baseline: doing so would let the next tick accept
-                // the same pop-up unconditionally, which is the thing being guarded against.
+                // The baseline is deliberately not updated, or the next tick would accept it.
                 Log.debug("ignoring \(target.describedAs): it arrived under a near-stationary "
                     + "pointer (\(Int(motion.total.rounded()))px of recent travel)")
                 return nil
@@ -781,9 +632,6 @@ final class Agent {
         return target
     }
 
-    /// What to do about this target while something else holds focus. The decision lives in
-    /// `FocusHandover`, where it is tested; this supplies the live facts it needs -- which app holds
-    /// focus, and how the pointer is moving -- and only while something is actually held.
     private func handoverDecision(for target: Target) -> HandoverDecision {
         guard config.handoverGuard, handover.isHolding,
               let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
@@ -795,82 +643,72 @@ final class Agent {
         )
     }
 
-    /// The entry guard's own test, so the two cannot come to disagree about what counts as a pointer
-    /// in motion -- except at `entryMotionPx` 0, where the guard is off and the comparison it uses
-    /// would be trivially true of a pointer that has not moved at all. Any travel at all stands in
-    /// for the threshold there; without it the settle clock could never start and the loop would
-    /// poll at full rate for as long as focus was held.
+    /// The entry guard's own test, except at threshold 0 where any travel at all stands in for it.
     private var pointerIsTravelling: Bool {
         config.entryMotionPx > 0
             ? motion.total >= Double(config.entryMotionPx)
             : motion.total > 0
     }
 
-    /// Ask, once a tick, whether the window last known under the pointer still holds focus, and let
-    /// the handover judge what that means.
-    ///
-    /// This is deliberately asked before resolving the pointer's new position. Movement cannot
-    /// explain focus leaving the window the pointer was already over: Heed has not acted on the new
-    /// position yet. That closes the sampling hole where a menu-opened Settings or About window
-    /// arrived during a tiny mouse movement and the old implementation discarded the evidence.
-    /// `noteMovingPointerBaseline` records the newly resolved position later in the same tick.
+    /// Ask, once a tick and before resolving the new pointer position, whether the window last under
+    /// the pointer still holds focus. Movement cannot explain focus leaving a window Heed has not
+    /// acted on yet.
     private func noteHandover() {
         handoverNotedThisTick = false
-        guard config.handoverGuard else { return }
-
-        let window = lastPointerWindow
-        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let hasFocus = window.map { focusMatches($0) }
-
-        // An app with no usable Accessibility tree is resolved at app granularity, and every window
-        // of it compares equal, so a hold anchored on one could not be ended by moving to another.
-        // It still earns a hold -- just an unanchored one, which anywhere the pointer settles ends.
-        let anchor = window?.window == nil ? nil : window
-
-        let handed = handover.sample(
-            window: window, hasFocus: hasFocus, anchor: anchor,
-            owner: front == ownPid ? nil : front, pointerMoved: false
-        )
-        guard handed else { return }
+        guard config.handoverGuard, pointerWindowKnown, sampleHandover() else { return }
         handoverNotedThisTick = true
 
         Log.debug("focus was handed to \(frontmostName()); it keeps it until the pointer settles "
             + "somewhere else")
-        // A dwell candidate formed before this must not outlive it: the machine would return it
-        // without hit-testing again, and the revalidation before applying focus deliberately uses
-        // the raw hit test, which knows nothing about holds.
+        // A dwell candidate formed before this must not land: the pre-apply revalidation uses the
+        // raw hit test, which knows nothing about holds.
         machine.invalidate()
     }
 
-    /// Once a moving tick has resolved where the pointer is now, make that the next comparison's
-    /// baseline. Do not overwrite a hold just discovered above: that hold must judge the movement.
-    ///
-    /// "Just discovered", and not "in force", which is what this used to ask -- and it was the
-    /// difference between a hold that can be overruled and one that cannot. Skipping the baseline
-    /// for the whole life of a hold left `last` pointing at the window the pointer had already left,
-    /// so the very next tick saw a window that was not the one it asked about last time and read it
-    /// as the world changing underneath a still pointer: a fresh hold, anchored on wherever the
-    /// pointer had just arrived, and the contest it was in the middle of thrown away. Focus could
-    /// then never follow the pointer again until something else changed which app was frontmost.
+    private func sampleHandover() -> Bool {
+        let window = lastPointerWindow
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        return handover.sample(
+            window: window, hasFocus: window.map { focusMatches($0) }, anchor: anchor(for: window),
+            owner: front == ownPid ? nil : front, pointerMoved: false
+        )
+    }
+
+    /// Record what an answered hit test found under the pointer. The first observation after a reset
+    /// also seeds the handover baseline: sampling before it would record "over nothing" and read the
+    /// real window as having arrived under a still pointer.
+    private func adoptPointerWindow(_ target: Target?) {
+        lastPointerWindow = target
+        guard !pointerWindowKnown else { return }
+        pointerWindowKnown = true
+        if config.handoverGuard { _ = sampleHandover() }
+    }
+
+    /// An app-level target compares equal for every window of its app, so it cannot anchor a hold.
+    private func anchor(for window: Target?) -> Target? {
+        window?.window == nil ? nil : window
+    }
+
+    /// Record the newly resolved window as the next comparison's baseline, except on the tick a hold
+    /// was just discovered: that hold has to judge the movement rather than be overwritten by it.
     private func noteMovingPointerBaseline(window: Target?) {
         guard config.handoverGuard, pointerMovedThisTick, !handoverNotedThisTick,
               let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
               front != ownPid
         else { return }
 
-        let anchor = window?.window == nil ? nil : window
         handover.sample(
-            window: window, hasFocus: nil, anchor: anchor,
+            window: window, hasFocus: nil, anchor: anchor(for: window),
             owner: front, pointerMoved: true
         )
     }
 
     private func frontmostName() -> String {
-        guard let front = NSWorkspace.shared.frontmostApplication else { return "another app" }
-        return front.localizedName ?? front.bundleIdentifier ?? "pid \(front.processIdentifier)"
+        NSWorkspace.shared.frontmostApplication?.describedAs ?? "another app"
     }
 
     private func hitTest(at point: CGPoint) -> Target? {
+        hitTestAnswered = false
         if now < hitTestCooldownUntil { return nil }
 
         var hit: AXUIElement?
@@ -878,19 +716,16 @@ final class Agent {
             systemWide, Float(point.x), Float(point.y), &hit
         )
 
-        // One line per transition, not per call: hit tests run on every tick the pointer moves,
-        // and an unrotated log must not pay by the hour for a permission revoked mid-run.
         if accessibilityLost, error != .apiDisabled {
             accessibilityLost = false
             syncMenuBar()
             Log.note("Accessibility access returned")
         }
 
-        // Only some of these mean "there is no Accessibility here"; the rest are infrastructure
-        // problems, and treating them all as the former sent healthy apps down the app-level path.
         switch error {
         case .success:
             hitTestFailures = 0
+            hitTestAnswered = true
         case .cannotComplete:
             hitTestFailures += 1
             if hitTestFailures >= 3 {
@@ -901,13 +736,14 @@ final class Agent {
             return nil
         case .notImplemented, .attributeUnsupported:
             // Genuinely no usable tree: some games, XQuartz, a few Java toolkits.
+            hitTestAnswered = true
             return appLevelFallback(at: point)
         case .noValue:
-            return nil   // nothing under the pointer, e.g. the desktop
+            hitTestAnswered = true
+            return nil
         case .apiDisabled:
             if !accessibilityLost {
                 accessibilityLost = true
-                // Undimmed, the icon would go on claiming to work after the grant was revoked.
                 syncMenuBar()
                 Log.note("Accessibility access is no longer granted; waiting for it to return")
             }
@@ -921,139 +757,127 @@ final class Agent {
         return resolveWindow(from: element)
     }
 
-    private func resolveWindow(from element: AXUIElement) -> Target? {
-        guard let pid = axPid(element), pid != ownPid else { return nil }
-        if let until = blockedUntil[pid], now < until { return nil }
+    private enum WindowElement {
+        case sheet
+        case none(elementRole: String?, topLevelRole: String?)
+        case window(AXUIElement, via: WindowSource)
+    }
 
+    private func windowElement(from element: AXUIElement) -> WindowElement {
         let elementRole = axString(element, kAXRoleAttribute)
         let topLevel = axElement(element, kAXTopLevelUIElementAttribute)
         let topLevelRole = topLevel.flatMap { axString($0, kAXRoleAttribute) }
 
-        let sources: [WindowSource]
         switch resolveWindowSource(topLevelRole: topLevelRole, elementRole: elementRole) {
+        case .sheet:
+            return .sheet
+        case .tryInOrder(let sources):
+            for source in sources {
+                let candidate: AXUIElement? = switch source {
+                case .topLevel: topLevel
+                case .windowAttribute: axElement(element, kAXWindowAttribute)
+                case .hitElement: element
+                }
+                if let candidate { return .window(candidate, via: source) }
+            }
+            return .none(elementRole: elementRole, topLevelRole: topLevelRole)
+        }
+    }
+
+    private func resolveWindow(from element: AXUIElement) -> Target? {
+        guard let pid = axPid(element), pid != ownPid, let app = eligibleApp(pid: pid) else {
+            return nil
+        }
+
+        let window: AXUIElement
+        switch windowElement(from: element) {
         case .sheet:
             Log.debug("skipped: the pointer is over a sheet")
             return nil
-        case .tryInOrder(let order):
-            sources = order
-        }
-
-        var candidateWindow: AXUIElement?
-        for source in sources {
-            switch source {
-            case .topLevel: candidateWindow = topLevel
-            case .windowAttribute: candidateWindow = axElement(element, kAXWindowAttribute)
-            case .hitElement: candidateWindow = element
-            }
-            if candidateWindow != nil { break }
-        }
-        guard let window = candidateWindow else {
+        case let .none(elementRole, topLevelRole):
             Log.debug("skipped: nothing window-shaped under the pointer "
                 + "(element \(elementRole ?? "?"), top level \(topLevelRole ?? "none"))")
             return nil
-        }
-
-        // These two need no Accessibility round trip, and hovering an excluded app -- the Dock, at
-        // any screen edge -- is constant. The policy checks both as well and remains the authority;
-        // this only avoids paying for the attribute reads below to arrive at the same answer.
-        guard let app = runningApp(pid: pid) else { return nil }
-        let bundle = app.bundleIdentifier
-        guard app.activationPolicy != .prohibited else { return nil }
-        if let bundle, config.excludedBundleIDs.contains(bundle) {
-            Log.debug("skipped: excluded \(bundle)")
-            return nil
+        case let .window(found, _):
+            window = found
         }
 
         let size = axSize(window, kAXSizeAttribute)
         let title = axString(window, kAXTitleAttribute)
-        let candidate = WindowCandidate(
+        let candidate = windowCandidate(window, size: size, title: title, bundleID: app.bundleIdentifier)
+        if case let .reject(why) = evaluate(candidate, policy: config.windowPolicy) {
+            Log.debug("skipped: \(why)")
+            return nil
+        }
+
+        guard let size else { return nil }
+        let frame = axPoint(window, kAXPositionAttribute)
+            .map { CGRect(origin: $0, size: size) } ?? .null
+
+        let name = app.describedAs
+        if name != lastResolvedName {
+            lastResolvedName = name
+            Log.debug("cursor over \(name)")
+        }
+        return Target(
+            pid: pid, window: window, bundleID: app.bundleIdentifier,
+            frame: frame, title: title, describedAs: name
+        )
+    }
+
+    /// App-level target for windows with no usable Accessibility tree.
+    private func appLevelFallback(at point: CGPoint) -> Target? {
+        guard let window = onScreenWindows().first(where: {
+            $0.level == 0 && $0.pid != ownPid && $0.frame.contains(point)
+        }) else { return nil }
+        guard let app = eligibleApp(pid: window.pid) else { return nil }
+
+        Log.debug("no AX tree at cursor; falling back to app level for \(app.describedAs)")
+        return Target(
+            pid: window.pid, window: nil, bundleID: app.bundleIdentifier,
+            frame: window.frame, title: nil, describedAs: app.describedAs
+        )
+    }
+
+    /// The app owning `pid`, unless it is blocked, cannot be activated, or is excluded. Checked
+    /// before any attribute read, since hovering an excluded app (the Dock) is constant.
+    private func eligibleApp(pid: pid_t) -> NSRunningApplication? {
+        if let until = blockedUntil[pid], now < until { return nil }
+        guard let app = NSRunningApplication(processIdentifier: pid),
+              app.activationPolicy != .prohibited
+        else { return nil }
+        if let bundle = app.bundleIdentifier, config.excludedBundleIDs.contains(bundle) {
+            Log.debug("skipped: excluded \(bundle)")
+            return nil
+        }
+        return app
+    }
+
+    private func windowCandidate(
+        _ window: AXUIElement, size: CGSize?, title: String?, bundleID: String?
+    ) -> WindowCandidate {
+        WindowCandidate(
             role: axString(window, kAXRoleAttribute),
             subrole: axString(window, kAXSubroleAttribute),
             isModal: axBool(window, kAXModalAttribute) == true,
             isMinimized: axBool(window, kAXMinimizedAttribute) == true,
             size: size,
             title: title,
-            bundleID: bundle,
+            bundleID: bundleID,
             canActivate: true
         )
-
-        if case let .reject(why) = evaluate(candidate, policy: config.windowPolicy) {
-            Log.debug("skipped: \(why)")
-            return nil
-        }
-
-        // Rejected above when absent; unwrapped here only to build the frame.
-        guard let size else { return nil }
-        // No position reported means no geometric identity, rather than a fabricated (0, 0).
-        let frame = axPoint(window, kAXPositionAttribute)
-            .map { CGRect(origin: $0, size: size) } ?? .null
-
-        let name = app.localizedName ?? bundle ?? "pid \(pid)"
-        if name != lastResolvedName {
-            lastResolvedName = name
-            Log.debug("cursor over \(name)")
-        }
-        return Target(
-            pid: pid, window: window, bundleID: bundle,
-            frame: frame, title: title, describedAs: name
-        )
-    }
-
-    /// App-level target for windows with no usable Accessibility tree. Per-window precision is not
-    /// reachable for these without private API, so the app is the ceiling.
-    private func appLevelFallback(at point: CGPoint) -> Target? {
-        guard let windows = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else { return nil }
-
-        for window in windows {   // front to back
-            guard let level = window[kCGWindowLayer as String] as? Int, level == 0,
-                  let pid = window[kCGWindowOwnerPID as String] as? pid_t,
-                  pid != ownPid,
-                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-                  frame.contains(point)
-            else { continue }
-
-            if let until = blockedUntil[pid], now < until { return nil }
-            guard let app = runningApp(pid: pid), app.activationPolicy != .prohibited else { return nil }
-            let bundle = app.bundleIdentifier
-            if let bundle, config.excludedBundleIDs.contains(bundle) { return nil }
-
-            let name = app.localizedName ?? bundle ?? "pid \(pid)"
-            Log.debug("no AX tree at cursor; falling back to app level for \(name)")
-            return Target(
-                pid: pid, window: nil, bundleID: bundle,
-                frame: frame, title: nil, describedAs: name
-            )
-        }
-        return nil
     }
 
     // MARK: - Applying focus
 
-    /// Move focus to a target, then confirm it actually moved.
+    /// Move focus and confirm it moved. Only `activate` moves focus on this OS; the Accessibility
+    /// writes cost one message each and may matter elsewhere, so they are fired but not waited on.
     ///
-    /// Everything is fired in one go rather than as separately verified steps. Verification is the
-    /// only expensive part -- it blocks this queue while it waits -- and measurement showed that on
-    /// this OS only `activate` ever moves focus: `AXFrontmost` reports `settable = true`, the write
-    /// returns success, and the frontmost app does not change. Waiting after each write to discover
-    /// that was pure latency, up to three times per switch, which is what a sluggish, fighting focus
-    /// felt like.
-    ///
-    /// The Accessibility writes stay because they cost one message each and may matter on an app not
-    /// tested here. They are no longer waited on.
-    ///
-    /// `followingPointer` is false for the focus-ring shortcuts, and it matters: the baseline
-    /// recorded below tells the handover that this app has focus because the pointer asked for it,
-    /// which clears any hold. Focus moved by keyboard is the opposite case -- it is exactly what a
-    /// hold is for -- so the shortcut leaves the change for `noteHandover` to discover on the next
-    /// tick, the same way it discovers Cmd-Tab.
+    /// `followingPointer` is false for the focus-ring shortcuts: focus moved by keyboard is what a
+    /// hold is for, so the change is left for `noteHandover` to discover like a Cmd-Tab.
     private func applyFocus(to target: Target, followingPointer: Bool = true) -> Bool {
         let app = appElement(for: target.pid)
 
-        // Order the window within its app first: this is what decides which of the app's windows
-        // ends up in front once it activates.
         var wantedWindow = false
         var gotWindow = false
         if let window = target.window {
@@ -1068,14 +892,8 @@ final class Agent {
             gotWindow = axSet(window, kAXFocusedAttribute, kCFBooleanTrue) == .success || gotWindow
         }
 
-        // Said only for the shortcut, which asked for a *particular* window: an app that refuses to
-        // be told which of its windows to use leaves the press with nothing visible to show for
-        // itself, and the log is the only place that can explain why. The pointer never asks for a
-        // window other than the one already under it, so the same refusal there says nothing.
-        //
-        // At note level, not debug: this is the shortcut appearing to do nothing, and a user who
-        // cannot see why would have no reason to suspect the app rather than Heed. It is a refusal
-        // reported by the app, not a guess -- both writes returned an error.
+        // The shortcut asked for a particular window; the log is the only place that can explain a
+        // press that appears to do nothing.
         if !followingPointer, wantedWindow, !gotWindow {
             Log.note("\(target.describedAs) refused both AXMain and AXFocused for this window; "
                 + "it was brought forward, but not that window of it")
@@ -1092,23 +910,9 @@ final class Agent {
         return true
     }
 
-    /// Wait for focus to actually land, and say how long it took.
-    ///
-    /// Asks NSWorkspace which app is frontmost, not the Accessibility API. `AXFocusedApplication` on
-    /// the system-wide element looks like the natural choice and is what an earlier version used, but
-    /// on this OS it returns nothing at all whenever the focused app has no usable AX tree -- so it
-    /// failed for precisely the apps most likely to need the fallback rungs, and it also made
-    /// `focusMatches` below answer "not focused" for everything. That is worse than a wrong answer:
-    /// it meant focus was re-applied on every tick, each attempt walking all three rungs and blocking
-    /// this queue, which showed up as windows visibly fighting each other for the front.
-    ///
-    /// Verification is app-level. Making the app frontmost is the part that moves keyboard focus, so
-    /// it is the part worth checking; the right window within the app is handled by AXRaise + AXMain
-    /// on the way in. The elapsed time is logged so this stays a measurement rather than a guess.
-    /// This budget is spent with the agent's queue blocked, so it is deliberately tight. An earlier
-    /// 600ms turned a refusal into 1.2s of frozen agent across two rungs, which is exactly what a
-    /// stuttering, fighting focus feels like. Nothing is lost by being impatient: the pointer is
-    /// still over the target, so a failure simply retries on the next tick.
+    /// Wait for the app to become frontmost. NSWorkspace rather than `AXFocusedApplication`, which
+    /// returns nothing when the focused app has no usable AX tree. The budget blocks `queue`, so it
+    /// is tight; a failure retries on the next tick.
     private func verifyFocus(_ target: Target) -> Bool {
         let started = now
         while true {
@@ -1126,48 +930,34 @@ final class Agent {
         }
     }
 
-    /// Live check against real system focus, used to decide whether focusing is needed at all.
+    /// Live check against system focus.
     private func focusMatches(_ target: Target) -> Bool {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else {
             return false
         }
-
-        // App-level fallback targets have no window to compare.
         guard let window = target.window else { return true }
 
-        // The app's own focused window, rather than going through the system-wide element.
         let app = appElement(for: target.pid)
         guard let focusedWindow = axElement(app, kAXFocusedWindowAttribute) else {
-            // No usable answer: treat the app being frontmost as good enough rather than
-            // re-focusing forever.
             return true
         }
         if CFEqual(focusedWindow, window) { return true }
 
-        // A dialog or floating panel that holds the app's key focus keeps it; see
-        // transientWindowHoldsFocus in FFMCore. Reported as "already focused" so the machine
-        // treats the tick as settled instead of retrying into a fight it must not win.
+        // Reported as focused so the machine settles instead of fighting a dialog or a prompt.
         let focusedSubrole = axString(focusedWindow, kAXSubroleAttribute)
         if transientWindowHoldsFocus(subrole: focusedSubrole) {
             Log.debug("\(target.describedAs): a \(focusedSubrole ?? "?") window holds the app's "
                 + "key focus; leaving it")
             return true
         }
-        // The target's app is the frontmost app here, so the cached check answers for it too.
         if config.promptGuard, frontmostPromptAwaitsAnswer() {
             Log.debug("\(target.describedAs): a prompt awaits an answer; leaving key focus alone")
             return true
         }
 
-        // Electron hands back a different instance for the same window depending on how it was
-        // obtained, so fall back to what was captured at hit-test time -- frame *and* title, for the
-        // reason on Target's equality. Anything unreadable counts as "not a match": the cost is a
-        // redundant focus call on an app that is already frontmost, which is cheap and idempotent.
-        guard !target.frame.isNull,
-              let origin = axPoint(focusedWindow, kAXPositionAttribute),
-              let size = axSize(focusedWindow, kAXSizeAttribute),
-              CGRect(origin: origin, size: size) == target.frame
-        else { return false }
+        // Electron: same window, different element. Anything unreadable counts as no match, which
+        // costs a redundant activate of an app that is already frontmost.
+        guard !target.frame.isNull, axFrame(focusedWindow) == target.frame else { return false }
         return axString(focusedWindow, kAXTitleAttribute) == target.title
     }
 
@@ -1183,10 +973,8 @@ final class Agent {
 
     // MARK: - Focus ring
 
-    /// Move keyboard focus one step around the ring of on-screen windows.
-    ///
-    /// Runs whether or not Heed is switched on: `enabled` decides whether focus follows the
-    /// *mouse*, and a keyboard shortcut is not the mouse.
+    /// Move keyboard focus one step around the ring of visible windows. Runs whether or not Heed is
+    /// switched on: `enabled` is about the mouse.
     private func stepFocus(by delta: Int) {
         queue.async { [self] in
             guard accessibilityTrusted(prompt: false) else {
@@ -1194,32 +982,22 @@ final class Agent {
                 return
             }
 
-            guard let ring = focusRing() else { return }   // focusRing logs why
+            guard let ring = focusRing() else { return }
             let windows = ring.windows
             let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
             let live = liveFocusIndex(in: windows, frontmost: front)
 
-            // The record of the last step is honoured only while it can still be describing the
-            // same gesture. It exists for the moment before the system catches up, and for a run of
-            // presses under a held key; left to stand indefinitely it would revive -- click back
-            // onto the window a step moved away from, and the next press would start from where
-            // that step landed and skip the window actually being looked at.
+            // The last step is honoured only while it can still describe the same gesture.
             let recent = now - lastStepAt < 1 ? lastStep : nil
-            // The fallback covers focus sitting on something the ring cannot name -- a panel, a
-            // sheet, an app with no Accessibility tree: step on from where that app sits rather
-            // than from the far end of the ring, which is the difference between advancing and
-            // teleporting.
+            // Focus on something the ring cannot name steps on from where that app sits.
             let from = ringStart(in: windows, live: live, lastStep: recent)
                 ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
 
-            // With no idea where to start, the first window is a reasonable guess when the app
-            // holding focus genuinely has nothing in the ring -- Raycast, the desktop, an app with
-            // no windows. It is not a reasonable guess when that app is missing because it failed
-            // to answer: focus would move somewhere never asked for, and the next press working
-            // does not undo a focus change already made.
+            // Starting from the first window is a fair guess for an app with nothing in the ring,
+            // not for one that failed to answer.
             if from == nil, let front, ring.unanswered.contains(front) {
-                Log.note("focus step: \(runningApp(pid: front)?.localizedName ?? "pid \(front)") "
-                    + "did not answer, so there is no telling where to step from")
+                let name = NSRunningApplication(processIdentifier: front)?.describedAs ?? "pid \(front)"
+                Log.note("focus step: \(name) did not answer, so there is no telling where to step from")
                 return
             }
 
@@ -1228,10 +1006,7 @@ final class Agent {
                 return
             }
 
-            // Revalidate before acting, for the reason the pointer path re-runs its hit test:
-            // building the ring is a great many cross-process calls, and a window can go away
-            // during them. A window that has closed answers nothing, and a minimized one is no
-            // longer where the ring placed it.
+            // Building the ring is many cross-process calls; a window can go away during them.
             let target = windows[index]
             guard let window = target.window,
                   axString(window, kAXRoleAttribute) == kAXWindowRole,
@@ -1245,176 +1020,93 @@ final class Agent {
             Log.debug("focus step \(delta > 0 ? "forward" : "back") to \(target.describedAs) "
                 + "-- \(target.title ?? "untitled") (\(index + 1) of \(windows.count))")
 
-            // Where the pointer is *now*, rather than `lastPointerWindow`, which is only as fresh
-            // as the last tick. Move the pointer onto another window and press within one tick of
-            // it, and a hold anchored on where it used to be would be released by movement that
-            // happened before the keystroke rather than after it -- handing focus to the window the
-            // keystroke was pressed to move away from. Written back, because `noteHandover` samples
-            // the same cache on the next tick and would otherwise re-anchor the hold on the stale
-            // reading it holds.
+            // Where the pointer is now, not as of the last tick: movement before the keystroke must
+            // not release the hold this declares. Written back so `noteHandover` samples the same.
             lastPointerWindow = (CGEvent(source: nil)?.location).flatMap { hitTest(at: $0) }
+            if hitTestAnswered { adoptPointerWindow(lastPointerWindow) }
 
             guard applyFocus(to: target, followingPointer: false) else { return }
-            // Recorded even when the app refused the window above. Nothing can make an app that
-            // refuses both AXMain and AXFocused honour either, so the choice is between a shortcut
-            // that walks past those windows and one that stops dead on the first of them. Walking
-            // past is the only one of the two that can ever reach anything.
+            // Recorded even when the app refused the window, so the shortcut walks past such
+            // windows rather than stopping dead on the first.
             lastStep = (from: live.map { windows[$0] }, to: target)
             lastStepAt = now
 
-            // The pointer must not undo this. A step to another app is visible to `noteHandover` on
-            // the next tick, the same way Cmd-Tab is, but a step between two windows of the app that
-            // already had focus changes nothing that inference looks at -- so the hold is declared
-            // here instead. Declared unconditionally: skipping it when the pointer already appears
-            // to be on the window that took focus would rely on `lastPointerWindow`, which is only
-            // as fresh as the last tick, and a hold on a window that already has focus costs
-            // nothing anyway.
+            // A step between two windows of the frontmost app changes nothing `noteHandover` can
+            // see, so the hold is declared here.
             if config.handoverGuard {
                 handover.noteKeyboardFocus(
-                    anchor: lastPointerWindow?.window == nil ? nil : lastPointerWindow,
+                    anchor: anchor(for: lastPointerWindow),
                     owner: target.pid
                 )
             }
-            // A dwell candidate formed before the switch must not land: the machine would return it
-            // without hit-testing again, and the revalidation before applying deliberately uses the
-            // raw hit test, which knows nothing about holds. And wake the loop, so the change is
-            // noticed on the next tick rather than at the next heartbeat.
             machine.invalidate()
             wakeLoop()
         }
     }
 
-    /// Every window the shortcuts can reach, in ring order.
-    ///
-    /// Built from two sources because neither answers alone. The window server's list knows what is
-    /// on screen in the current Space and in what order things are stacked, neither of which
-    /// Accessibility can say: an app's `AXWindows` spans every Space and offers no way to tell them
-    /// apart. Accessibility knows the role and subrole that decide whether a window is an ordinary
-    /// one, and hands back the element needed to focus it, which the window list cannot. So the list
-    /// says which windows are there and Accessibility judges them.
-    ///
-    /// Only the ones you can see. The window server calls a window on screen while it is completely
-    /// buried behind others, and cycling through those is cycling through every window ever opened:
-    /// ten maximised windows on one display would be ten stops that all look identical, and each
-    /// step would bury whatever you were just looking at. `isVisible` in FFMCore decides it.
-    ///
-    /// Apps with no usable Accessibility tree are left out rather than added at app granularity.
-    /// The pointer can afford that fallback because it is aiming at one place on screen; a ring
-    /// cannot, because several windows of such an app would be one indistinguishable entry that
-    /// stepping could never move between.
-    ///
-    /// This runs on a keypress rather than on every tick, which is what makes the cost acceptable.
-    private func focusRing() -> Ring? {
-        // Front to back, which is the order the window server lists them in and the whole basis of
-        // the visibility test below.
-        var stack: [(number: Int, pid: pid_t, frame: CGRect)] = []
-        if let listed = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] {
-            for window in listed {
-                // Level 0 only. Menus, panels, HUDs and the Dock all sit above it, and none of them
-                // is somewhere keyboard focus should be able to land.
-                guard let level = window[kCGWindowLayer as String] as? Int, level == 0,
-                      let pid = window[kCGWindowOwnerPID as String] as? pid_t,
-                      let number = window[kCGWindowNumber as String] as? Int,
-                      let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-                      let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary)
-                else { continue }
-                stack.append((number, pid, frame))
-            }
-        }
+    private struct Ring {
+        let windows: [Target]
+        /// Apps asked for their windows that did not answer, as opposed to having none.
+        let unanswered: Set<pid_t>
+    }
 
-        // Established before the visibility pass, not after it: that pass is the one part of this
-        // whose cost grows with the *square* of how many windows are on screen, so a budget that
-        // began afterwards would be bounding everything except the thing most able to overrun it.
+    /// Every visible window the shortcuts can reach, in ring order. The window server says what is
+    /// on screen in this Space and in what order; Accessibility judges each window and hands back
+    /// the element to focus. Apps with no usable tree are left out: several windows that cannot be
+    /// told apart would be one entry the shortcut could never step between.
+    private func focusRing() -> Ring? {
+        let stack = onScreenWindows().filter { $0.level == 0 }
+        let frames = stack.map(\.frame)
+
+        // Set before the visibility pass, whose cost grows with the square of the window count.
         let deadline = now + 0.5
 
-        var onScreen: [pid_t: [(number: Int, frame: CGRect)]] = [:]
+        var onScreen: [pid_t: [ListedWindow]] = [:]
         for (depth, window) in stack.enumerated() {
             if now > deadline { return outOfTime() }
-            // Tested against everything in front of it whoever owns it, including windows this ring
-            // would never accept as targets: they hide what is behind them just the same. Our own
-            // are dropped afterwards for that reason.
-            guard isVisible(window.frame, behind: stack[..<depth].map(\.frame)) else { continue }
-            guard window.pid != ownPid else { continue }
-            onScreen[window.pid, default: []].append((window.number, window.frame))
+            // Tested against everything in front whoever owns it; our own windows are dropped after.
+            guard isVisible(window.frame, behind: frames[..<depth]), window.pid != ownPid else { continue }
+            onScreen[window.pid, default: []].append(window)
         }
 
         var targets: [Int: Target] = [:]
         var ring: [RingWindow] = []
         var unanswered: Set<pid_t> = []
 
-        // The budget above covers the reads below as well, and they are most of what it is for.
-        // Each is bounded by the process-wide messaging timeout, but there are a great many of them
-        // -- one app's window list plus a handful of attributes per window, across every app with
-        // something on screen -- so several unresponsive apps could hold this queue, and with it the
-        // pointer loop, for seconds.
-        //
-        // Exceeding it abandons the whole ring rather than using the part that was built. The apps
-        // are walked in no particular order, so a partial ring is an arbitrary subset: the window
-        // the user is looking at may be missing from it, and stepping through it would move focus
-        // somewhere unrelated. Refusing is the honest answer, and the next press tries again.
+        // Exceeding the budget abandons the whole ring: a partial one is an arbitrary subset.
         for (pid, listed) in onScreen {
             if now > deadline { return outOfTime() }
-            if let until = blockedUntil[pid], now < until { continue }
-            guard let app = runningApp(pid: pid), app.activationPolicy != .prohibited else {
-                continue
-            }
-            let bundle = app.bundleIdentifier
-            if let bundle, config.excludedBundleIDs.contains(bundle) { continue }
-            // Told apart from an app that answered with no windows: the caller must not read
-            // "missing from the ring" as "has nothing to contribute" when the app simply did not
-            // answer.
+            guard let app = eligibleApp(pid: pid) else { continue }
             guard let windows = axCopy(appElement(for: pid), kAXWindowsAttribute) as? [AXUIElement]
             else {
                 unanswered.insert(pid)
                 continue
             }
 
-            let name = app.localizedName ?? bundle ?? "pid \(pid)"
+            let bundle = app.bundleIdentifier
+            let name = app.describedAs
             var claimed: Set<Int> = []
 
             for window in windows {
-                // Also here, not only between apps: one app with many windows can spend the whole
-                // budget by itself.
                 if now > deadline { return outOfTime() }
-                // Position and size first, and nothing else until they match something on screen.
-                // An app's window list spans every Space, and reading the other five attributes off
-                // each window on every other Space is most of what this could have cost.
-                guard let origin = axPoint(window, kAXPositionAttribute),
-                      let size = axSize(window, kAXSizeAttribute)
-                else {
-                    // Counts as not answering, like the window list itself: if this is how every
-                    // window of the app goes, the app is missing from the ring because it could not
-                    // be read, not because it has nothing to offer, and the caller must be able to
-                    // tell those apart.
+                // Position and size first: an app's window list spans every Space, and nothing else
+                // is read until a window matches something on screen.
+                guard let frame = axFrame(window) else {
                     unanswered.insert(pid)
                     continue
                 }
-                let frame = CGRect(origin: origin, size: size)
                 guard let listing = listed.first(where: {
                     !claimed.contains($0.number) && framesAgree($0.frame, frame)
                 }) else { continue }
                 claimed.insert(listing.number)
 
                 let title = axString(window, kAXTitleAttribute)
-                let candidate = WindowCandidate(
-                    role: axString(window, kAXRoleAttribute),
-                    subrole: axString(window, kAXSubroleAttribute),
-                    isModal: axBool(window, kAXModalAttribute) == true,
-                    isMinimized: axBool(window, kAXMinimizedAttribute) == true,
-                    size: size,
-                    title: title,
-                    bundleID: bundle,
-                    canActivate: true
-                )
+                let candidate = windowCandidate(window, size: frame.size, title: title, bundleID: bundle)
                 if case let .reject(why) = evaluate(candidate, policy: config.windowPolicy) {
                     Log.debug("ring skips a window of \(name): \(why)")
                     continue
                 }
 
-                // Keyed on the window server's number: unique, and fixed for as long as the window
-                // lives, so two windows sharing an origin keep the same order between presses.
                 targets[listing.number] = Target(
                     pid: pid, window: window, bundleID: bundle,
                     frame: frame, title: title, describedAs: name
@@ -1423,9 +1115,7 @@ final class Agent {
             }
         }
 
-        // Once more, because the checkpoints above are all *before* a read: the last one can start
-        // inside the budget, time out beyond it, and leave by the front door with a ring missing
-        // whatever it was reading.
+        // The checkpoints above are all before a read; the last read can run past the deadline.
         if now > deadline { return outOfTime() }
 
         return Ring(
@@ -1434,32 +1124,19 @@ final class Agent {
         )
     }
 
-    /// The windows the shortcuts can step through, and the apps that could not be asked.
-    private struct Ring {
-        let windows: [Target]
-        /// Apps asked for their windows that did not answer. Lets the caller tell an app with
-        /// nothing in the ring from an app that could not be read, which are the same absence and
-        /// call for opposite answers.
-        let unanswered: Set<pid_t>
-    }
-
     private func outOfTime() -> Ring? {
         Log.note("gave up building the focus ring after 500ms; some app is not answering")
         return nil
     }
 
-    /// Which ring entry the system says holds focus, or nil when focus is on something the ring does
-    /// not contain -- a panel, a sheet, a window on another Space, an app with no Accessibility tree.
+    /// Which ring entry holds focus, or nil when focus is on something the ring does not contain.
     private func liveFocusIndex(in ring: [Target], frontmost front: pid_t?) -> Int? {
         guard let front, front != ownPid,
               let focused = axElement(appElement(for: front), kAXFocusedWindowAttribute)
         else { return nil }
 
-        // Identity across the whole ring first, and geometry only as a second pass over it. One
-        // pass that took geometry as soon as `CFEqual` failed would answer with whichever window
-        // came first, and two maximised windows of one app share a frame exactly -- so a step from
-        // the second of them would be measured from the first and land back on the one already
-        // focused, which is the shortcut failing at the one thing it does.
+        // Identity across the whole ring first: two maximised windows share a frame, and taking
+        // geometry as soon as CFEqual failed would answer with whichever came first.
         if let index = ring.firstIndex(where: { candidate in
             guard candidate.pid == front, let window = candidate.window else { return false }
             return CFEqual(window, focused)
@@ -1467,45 +1144,14 @@ final class Agent {
             return index
         }
 
-        // Electron apps hand back a different element for the same window depending on how it was
-        // obtained, so identity alone is not enough. Exactly the rule `Target`'s own equality uses,
-        // and for the same reasons: the title has to agree as well, because two windows of one app
-        // can share a frame exactly and a frame is not an identity -- and the frame has to agree
-        // *exactly*, because both sides of this comparison are Accessibility's own report of it.
-        // `framesAgree` is tolerant for the one job it has, reconciling two different APIs, and
-        // being tolerant here would let two near-identical windows collapse into one again.
-        guard let origin = axPoint(focused, kAXPositionAttribute),
-              let size = axSize(focused, kAXSizeAttribute)
-        else { return nil }
-        let frame = CGRect(origin: origin, size: size)
+        // Exact, unlike `framesAgree`: both sides are Accessibility's own report.
+        guard let frame = axFrame(focused) else { return nil }
         let title = axString(focused, kAXTitleAttribute)
         return ring.firstIndex { $0.pid == front && $0.frame == frame && $0.title == title }
     }
 
-    /// The displays, in the coordinate space Accessibility reports window positions in: global,
-    /// top-left origin. `NSScreen` measures from the bottom left and is main-thread only; this runs
-    /// on `queue`.
-    private func screenFrames() -> [CGRect] {
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
-
-        // Mirrored displays report identical bounds, and a duplicate screen would give the ring a
-        // bucket that can never hold anything.
-        var frames: [CGRect] = []
-        for id in ids.prefix(Int(count)) where !frames.contains(CGDisplayBounds(id)) {
-            frames.append(CGDisplayBounds(id))
-        }
-        return frames
-    }
-
-    /// Whether the window server's rectangle and Accessibility's describe the same window.
-    ///
-    /// Tolerant rather than exact, and only for that one job. The two agreed exactly in every app
-    /// tested, but they are separate reports from separate APIs, and a pixel of disagreement must
-    /// not drop a window out of the ring altogether. Comparing two Accessibility reads to each other
-    /// needs no tolerance and must not have any -- see `liveFocusIndex`.
+    /// Whether the window server's rectangle and Accessibility's describe the same window. Tolerant
+    /// only because they are separate reports from separate APIs.
     private func framesAgree(_ a: CGRect, _ b: CGRect) -> Bool {
         abs(a.origin.x - b.origin.x) <= 2 && abs(a.origin.y - b.origin.y) <= 2
             && abs(a.width - b.width) <= 2 && abs(a.height - b.height) <= 2
@@ -1513,16 +1159,8 @@ final class Agent {
 
     // MARK: - Caches
 
-    private func runningApp(pid: pid_t) -> NSRunningApplication? {
-        NSRunningApplication(processIdentifier: pid)
-    }
-
-    /// Whether the frontmost app's key window is a prompt in mid-question; see windowAwaitsAnswer.
-    ///
-    /// Cached briefly: at instant dwell this is consulted on every tick of a focus fight, and the
-    /// answer takes several cross-process reads. Cheap for every other tick of heed's life -- no
-    /// Accessibility call happens until the frontmost app actually has a prompt rule, which only
-    /// Finder does.
+    /// Whether the frontmost app's key window is a prompt mid-question. Cached briefly; nothing is
+    /// read unless the frontmost app has a prompt rule.
     private func frontmostPromptAwaitsAnswer() -> Bool {
         if now < promptCacheUntil { return promptCached }
         promptCacheUntil = now + 0.25
@@ -1542,23 +1180,18 @@ final class Agent {
         return promptCached
     }
 
-    /// Buttons that are direct children of the window; the buttons inside a prompt's content
-    /// (a scroll area's per-item controls, say) deliberately do not count.
+    /// Buttons that are direct children of the window; buttons inside its content do not count.
     private func windowLevelButtonCount(_ window: AXUIElement) -> Int {
         guard let children = axCopy(window, kAXChildrenAttribute) as? [AXUIElement] else { return 0 }
-        return children.reduce(0) {
-            $0 + (axString($1, kAXRoleAttribute) == kAXButtonRole ? 1 : 0)
-        }
+        return children.filter { axString($0, kAXRoleAttribute) == kAXButtonRole }.count
     }
 
     private func appElement(for pid: pid_t) -> AXUIElement {
         let launched = NSRunningApplication(processIdentifier: pid)?.launchDate
-        // A nil launch date never matches: two unrelated processes can both fail to report one,
-        // and creating the element again is local work, not a cross-process call.
+        // A nil launch date never matches; creating the element again is local work.
         if let cached = appElements[pid], let launched, cached.launched == launched {
             return cached.element
         }
-        // Either nothing cached, or the pid was recycled by a different process.
         let element = AXUIElementCreateApplication(pid)
         appElements[pid] = (element, launched)
         return element
@@ -1567,8 +1200,6 @@ final class Agent {
     // MARK: - System events
 
     private func observeSystemEvents() {
-        // Main thread, and once: `start()` registers before the queue's `isRunning` guard, so a
-        // second call would double up every observer and leak the monitor token.
         dispatchPrecondition(condition: .onQueue(.main))
         guard !observersInstalled else { return }
         observersInstalled = true
@@ -1581,11 +1212,7 @@ final class Agent {
             NSWorkspace.sessionDidBecomeActiveNotification,
         ] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                guard let self else { return }
-                queue.async {
-                    self.pendingInvalidation = true
-                    self.wakeLoop()   // an idling loop must not sit on this for a whole heartbeat
-                }
+                self?.invalidateFromSystemEvent()
             }
         }
 
@@ -1600,20 +1227,13 @@ final class Agent {
                 self.appElements[pid] = nil
                 self.blockedUntil[pid] = nil
                 self.failureCounts[pid] = nil
-                // Pids are recycled: a hold left behind by a dead process would be applied to
-                // whatever inherits its number.
                 self.handover.forget(owner: pid)
             }
         }
 
-        // Pointer movement, which is the whole input to this program, arrives as events rather than
-        // being polled for. A global monitor sees what is delivered to other applications, which is
-        // every application but this one.
-        //
-        // It is an optimisation, not the mechanism: everything still works if it never fires, just
-        // with up to `idlePollMs` of latency instead of none, which is why the heartbeat is a
-        // second rather than a minute. Mouse-up is in the mask because a click can change what is
-        // frontmost without the pointer travelling a pixel.
+        // An optimisation, not the mechanism: the idle heartbeat covers anything this never sees,
+        // including events delivered to this process itself. Mouse-up is here because a click can
+        // change what is frontmost without the pointer travelling.
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
                        .leftMouseUp, .rightMouseUp, .otherMouseUp]
@@ -1622,30 +1242,17 @@ final class Agent {
             wantsMouseWake = false
             queue.async { self.wakeLoop() }
         }
-        // Two gaps this leaves, both bounded by the heartbeat rather than closed: an event landing
-        // in the moment between the queue deciding to idle and the main thread being told, and
-        // events delivered to this process itself, which a global monitor never sees -- the pointer
-        // sitting on our own status item is the whole of that case.
 
-        // The callback is a bare C function pointer, but it takes a context pointer, so it can hand
-        // off to the queue instead of writing a shared global -- which was a genuine data race, and
-        // could also drop an update entirely if it landed between the read and the clear.
-        //
-        // Unretained is safe because the agent lives for the life of the process.
+        // Unretained is safe: the agent lives for the life of the process.
         CGDisplayRegisterReconfigurationCallback({ _, _, context in
             guard let context else { return }
-            Unmanaged<Agent>.fromOpaque(context).takeUnretainedValue().noteDisplayReconfiguration()
+            Unmanaged<Agent>.fromOpaque(context).takeUnretainedValue().invalidateFromSystemEvent()
         }, Unmanaged.passUnretained(self).toOpaque())
     }
 
-    /// Installed before the Accessibility gate, not from `start()`.
-    ///
-    /// Left inside `start()` it was never installed while the agent sat waiting for permission,
-    /// so SIGHUP kept its default disposition and killed the process instead of reloading. KeepAlive
-    /// hid that by respawning it.
+    /// Installed before the Accessibility gate; otherwise SIGHUP kept its default disposition while
+    /// the agent waited for permission, and KeepAlive hid the resulting exit.
     func installSignalHandlers() {
-        // A dispatch source, not a POSIX handler: almost nothing is safe to call from inside a
-        // signal handler, and reloading config is not on that list.
         signal(SIGHUP, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
         source.setEventHandler { [weak self] in self?.reload() }
@@ -1655,13 +1262,10 @@ final class Agent {
 
     // MARK: - Diagnostics
 
-    /// One-shot report of what the agent sees at the pointer right now.
-    ///
-    /// Exists because every interesting failure of a tool like this is invisible: "it did not focus
-    /// that window" has a dozen possible causes, and this prints which one applies.
+    /// One-shot report of what the agent sees at the pointer, using the agent's own resolution.
     func probe(at explicit: CGPoint? = nil) {
         Log.verbose = true
-        AXUIElementSetMessagingTimeout(systemWide, 0.5)   // patience over responsiveness here
+        AXUIElementSetMessagingTimeout(systemWide, 0.5)
 
         let cursor = explicit ?? CGEvent(source: nil)?.location ?? .zero
         if explicit != nil { print("(probing an explicit point, not the pointer)") }
@@ -1684,8 +1288,7 @@ final class Agent {
         print("  overlay on screen:  \(config.menuGuard && overlayPresent() ? "yes  <- SUPPRESSING" : "no")")
         let promptHolds = config.promptGuard && frontmostPromptAwaitsAnswer()
         print("  prompt mid-question:\(promptHolds ? " yes  <- HOLDING ALL FOCUS" : " no")")
-        // Reported rather than answered: a hold belongs to the running agent, which has been
-        // watching what comes to the front. This process has just started and has no history at all.
+        // A hold belongs to the running agent's history, which this process does not have.
         let handoverSetting = config.handoverGuard
             ? "on, settle \(config.handoverSettleMs)ms -- held by the running agent, see its log"
             : "off"
@@ -1700,35 +1303,17 @@ final class Agent {
             print("  hit test:           failed, AXError \(error.rawValue)")
         }
         if let element = hit {
-            let elementRole = axString(element, kAXRoleAttribute)
-            print("  element role:       \(elementRole ?? "-")")
-
-            // Uses the same resolution the agent does, rather than a second copy of the rules: a
-            // diagnostic that disagrees with the code it is diagnosing is worse than none.
+            print("  element role:       \(axString(element, kAXRoleAttribute) ?? "-")")
             let topLevel = axElement(element, kAXTopLevelUIElementAttribute)
-            let topLevelRole = topLevel.flatMap { axString($0, kAXRoleAttribute) }
-            print("  top-level role:     \(topLevelRole ?? "-")")
+            print("  top-level role:     \(topLevel.flatMap { axString($0, kAXRoleAttribute) } ?? "-")")
 
-            var window: AXUIElement?
-            switch resolveWindowSource(topLevelRole: topLevelRole, elementRole: elementRole) {
+            switch windowElement(from: element) {
             case .sheet:
                 print("  resolved via:       nothing -- the pointer is over a sheet")
-            case .tryInOrder(let order):
-                for source in order {
-                    switch source {
-                    case .topLevel: window = topLevel
-                    case .windowAttribute: window = axElement(element, kAXWindowAttribute)
-                    case .hitElement: window = element
-                    }
-                    if window != nil {
-                        print("  resolved via:       \(source)")
-                        break
-                    }
-                }
-                if window == nil { print("  resolved via:       nothing window-shaped") }
-            }
-
-            if let window {
+            case .none:
+                print("  resolved via:       nothing window-shaped")
+            case let .window(window, via):
+                print("  resolved via:       \(via)")
                 print("  subrole:            \(axString(window, kAXSubroleAttribute) ?? "-")")
                 if let size = axSize(window, kAXSizeAttribute) {
                     print("  size:               \(Int(size.width))x\(Int(size.height))")
@@ -1750,6 +1335,10 @@ final class Agent {
             print("  target:             none -- see the guards above, or the role/size checks")
         }
     }
+}
 
-    private var hangupSource: DispatchSourceSignal?
+private extension NSRunningApplication {
+    var describedAs: String {
+        localizedName ?? bundleIdentifier ?? "pid \(processIdentifier)"
+    }
 }

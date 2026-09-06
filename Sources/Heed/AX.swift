@@ -1,11 +1,8 @@
 import ApplicationServices
 import Foundation
 
-// MARK: - Attribute access
-//
-// Thin wrappers so call sites read as intent rather than as out-parameter plumbing. Every one of
-// these is a cross-process message, so they are all potential stalls; callers keep the number per
-// tick down deliberately.
+// Every call here is a cross-process message and a potential stall; callers keep the count per
+// tick down.
 
 func axCopy(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
     var value: CFTypeRef?
@@ -46,14 +43,19 @@ func axSize(_ element: AXUIElement, _ attribute: String) -> CGSize? {
     return size
 }
 
+func axFrame(_ element: AXUIElement) -> CGRect? {
+    guard let origin = axPoint(element, kAXPositionAttribute),
+          let size = axSize(element, kAXSizeAttribute)
+    else { return nil }
+    return CGRect(origin: origin, size: size)
+}
+
 @discardableResult
 func axSet(_ element: AXUIElement, _ attribute: String, _ value: CFTypeRef) -> AXError {
     AXUIElementSetAttributeValue(element, attribute as CFString, value)
 }
 
-/// Whether an attribute can actually be written on this specific element. Needed because
-/// settability is per-element, not per-role: `AXFocused` is writable on some windows and not
-/// others, so it has to be asked rather than assumed.
+/// Settability is per element, not per role: `AXFocused` is writable on some windows and not others.
 func axIsSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
     var settable: DarwinBoolean = false
     guard AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success else { return false }
@@ -66,23 +68,15 @@ func axPid(_ element: AXUIElement) -> pid_t? {
     return pid
 }
 
-// MARK: - Target
-
-/// A window the pointer is over, and the app that owns it.
-///
-/// `window` is nil for the app-level fallback used when an app exposes no usable Accessibility tree
-/// (some games, XQuartz, a few Java toolkits). Per-window precision is not reachable for those
-/// without private API; the app is the honest ceiling.
+/// A window the pointer is over and the app that owns it. `window` is nil for the app-level
+/// fallback used when an app exposes no usable Accessibility tree.
 struct Target {
     let pid: pid_t
     let window: AXUIElement?
     let bundleID: String?
-    /// Captured at hit-test time, so windows can be compared without further cross-process calls.
-    /// `.null` when the window would not report a position -- see the equality below.
+    /// Captured at hit-test time; `.null` when the window reports no position.
     let frame: CGRect
-    /// Also captured up front, and part of identity: see the equality below.
     let title: String?
-    /// For logs only.
     let describedAs: String
 }
 
@@ -93,20 +87,10 @@ extension Target: Equatable {
         case (nil, nil):
             return true
         case let (lhsWindow?, rhsWindow?):
-            // CFEqual first, then the frame.
-            //
-            // Identity alone is not sufficient: Electron apps (Slack, Spotify) hand back a different
-            // AXUIElement instance for the same logical window depending on how it was obtained, so
-            // CFEqual reports a difference where there is none. Treating that as a different window
-            // makes the pointer look like it is constantly entering somewhere new. The frame is
-            // captured up front, so this costs no extra cross-process calls.
+            // Electron hands back a different AXUIElement for the same window depending on how it
+            // was obtained, so identity is backed by frame and title. Frame alone is not identity:
+            // two maximised windows of one app share one.
             if CFEqual(lhsWindow, rhsWindow) { return true }
-
-            // Geometry alone is not identity: two windows of one app can share a frame exactly --
-            // two maximised windows being the obvious case -- and treating those as the same window
-            // means focusing one silently satisfies a request for the other. So the title has to
-            // agree as well, and a window that would not report a position (frame `.null`) gets no
-            // fallback at all rather than a fabricated origin.
             guard !lhs.frame.isNull, !lhs.frame.isEmpty, lhs.frame == rhs.frame else { return false }
             return lhs.title == rhs.title
         default:

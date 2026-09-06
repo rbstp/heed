@@ -1,25 +1,18 @@
 import AppKit
 import FFMCore
 
-/// The menu bar item: says whether focus is following the pointer, and toggles it when clicked.
-///
-/// Main thread only. The agent's state lives on its own queue and AppKit's lives here, so every
-/// crossing between the two is an explicit hop -- `Agent.syncMenuBar` one way, the click handler
-/// the other.
+/// The menu bar item. Main thread only; `Agent` hops to it explicitly.
 final class MenuBarController: NSObject {
     private let item: NSStatusItem
     private let onClick: () -> Void
     private let onQuit: () -> Void
     private let onChooseModifier: (ModifierPreset) -> Void
     private var state = MenuBarState(enabled: true, trusted: true)
-    /// The registered hotkey, shown beside the toggle so the menu is where you find out it exists.
-    /// Nil when none is registered.
+    /// The toggle hotkey, shown beside the menu item. Nil when none is registered.
     var shortcut: HotkeySpec?
-    /// The modifier every shortcut is registered under, so the menu can show which one is in force.
-    /// Nil when nothing is registered, or when it is a combination nobody offered.
+    /// The modifier every shortcut is registered under. Nil when nothing is registered, or when it
+    /// is a combination the menu does not offer.
     var modifiers: Set<HotkeySpec.Modifier>?
-    /// The pending restore after a flash, so a second answer replaces the first rather than being
-    /// wiped by the first one's timer.
     private var flashRestore: DispatchWorkItem?
 
     init(
@@ -39,22 +32,15 @@ final class MenuBarController: NSObject {
         button.imagePosition = .imageOnly
         button.target = self
         button.action = #selector(clicked)
-        // Right-click has to be asked for; a status item button sends its action on left mouse up
-        // only. Control-click arrives as an ordinary left click carrying the modifier, so both are
-        // sorted out in `clicked`.
+        // A status item button sends its action on left mouse up only unless asked.
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
-    /// Removed explicitly rather than left to the item's own deallocation, which would give the
-    /// slot up whenever the last reference happened to drop rather than now.
     func remove() {
         dispatchPrecondition(condition: .onQueue(.main))
         NSStatusBar.system.removeStatusItem(item)
     }
 
-    /// What to show is decided by `MenuBarState` in FFMCore, where it is tested; this only applies
-    /// the answer. AppKit's own disabled-control treatment does the dimming, so it matches every
-    /// other menu bar item and follows appearance changes rather than an alpha of our own.
     func render(enabled: Bool, trusted: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let button = item.button else { return }
@@ -76,13 +62,8 @@ final class MenuBarController: NSObject {
         }
     }
 
-    /// The menu exists for what a one-button switch cannot say: which version is running, that the
-    /// icon is a switch at all, where the log is, and how to leave.
-    ///
-    /// Assigned to the item and taken away again rather than left in place, because a status item
-    /// that owns a menu opens it on every click -- which would cost the left-click toggle. Handing
-    /// it over for the length of one click is what gets AppKit's own placement and highlighting
-    /// instead of a popover positioned by hand.
+    /// The menu is assigned for the length of one click: a status item that owns a menu opens it on
+    /// every click, which would cost the left-click toggle.
     private func showMenu() {
         guard let button = item.button else { return }
         item.menu = menu()
@@ -93,7 +74,6 @@ final class MenuBarController: NSObject {
     private func menu() -> NSMenu {
         let menu = NSMenu()
 
-        // No action, so AppKit's automatic enabling greys it out: a heading, not a command.
         menu.addItem(NSMenuItem(title: "Heed \(MenuBarController.version)", action: nil,
                                 keyEquivalent: ""))
         menu.addItem(.separator())
@@ -101,9 +81,8 @@ final class MenuBarController: NSObject {
         let toggle = NSMenuItem(title: state.toggleTitle, action: #selector(toggleFromMenu),
                                 keyEquivalent: "")
         toggle.target = self
-        // Only for a key AppKit can render from a single character. An F-key or an arrow needs the
-        // NSxxxFunctionKey constants, and a menu is not worth a second key table -- the log and the
-        // README name the combination in every case.
+        // Only a single-character key renders as a key equivalent; F-keys and arrows would need the
+        // NSxxxFunctionKey table.
         if let shortcut, shortcut.key.count == 1 {
             toggle.keyEquivalent = shortcut.key
             toggle.keyEquivalentModifierMask = MenuBarController.modifierMask(shortcut)
@@ -120,10 +99,6 @@ final class MenuBarController: NSObject {
 
         menu.addItem(.separator())
 
-        // Last and separated, where every other Mac app keeps it, with the ⌘Q that matches. What
-        // quitting costs is not the same in both cases -- installed, it takes the login agent with
-        // it until the next login -- so the tooltip comes from `QuitPlan`, which is also what
-        // decides how it is done.
         let quit = NSMenuItem(title: "Quit Heed", action: #selector(quitFromMenu),
                               keyEquivalent: "q")
         quit.target = self
@@ -133,11 +108,6 @@ final class MenuBarController: NSObject {
         return menu
     }
 
-    /// The modifier every shortcut runs under, changed in one place rather than three.
-    ///
-    /// The keys are left alone: which key does what is a matter of taste that `defaults write`
-    /// already serves, while the modifier is the part that collides with other software and so the
-    /// part worth being able to change without a restart.
     private func modifierMenu() -> NSMenu {
         let menu = NSMenu()
         let current = ModifierPreset.matching(modifiers)
@@ -147,8 +117,6 @@ final class MenuBarController: NSObject {
             item.target = self
             item.tag = index
             item.state = preset == current ? .on : .off
-            // The symbols are how a Mac names these and how VoiceOver reads them; the words and the
-            // warning are what a tooltip is for.
             item.toolTip = [preset.spoken, preset.caution].compactMap { $0 }.joined(separator: ". ")
             menu.addItem(item)
         }
@@ -161,15 +129,7 @@ final class MenuBarController: NSObject {
         onChooseModifier(presets[sender.tag])
     }
 
-    /// Say whether a change took, in the one place the user is already looking.
-    ///
-    /// The icon they just clicked rather than a notification somewhere else on screen. Refusal is
-    /// shown for longer than acceptance, because it is the one that asks you to do something about
-    /// it -- and the log names the combination and the app that already holds it.
-    ///
-    /// The colour is drawn into the image rather than tinted onto it. A template image is a *mask*,
-    /// so a colour applied over one goes nowhere: `contentTintColor` on the status item's button is
-    /// simply ignored, which was measured rather than assumed.
+    /// Flash the icon green or red to say whether a change took. Refusal shows longer.
     func flash(accepted: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let button = item.button else { return }
@@ -202,7 +162,6 @@ final class MenuBarController: NSObject {
         onQuit()
     }
 
-    /// The agent's only output. Opens in whatever handles .log, which is Console by default.
     @objc private func openLog() {
         let url = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Logs/heed.log")
@@ -213,22 +172,13 @@ final class MenuBarController: NSObject {
         NSWorkspace.shared.open(url)
     }
 
-    /// The bundle's version, or a marker when there is no bundle -- running straight out of
-    /// `.build`, where claiming a version would be a small lie.
     private static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "(unpackaged)"
     }
 
-    /// The app icon's cube, reduced to what survives at menu bar size: the hexagon silhouette and
-    /// the three edges meeting at its near corner, without which it reads as a plain hexagon.
-    ///
-    /// A template image, so AppKit inverts it for a light or dark menu bar instead of us shipping
-    /// two. Drawn in code for the same reason `Tools/make-icon.swift` is, and the drawing handler
-    /// is re-run per backing scale, so the strokes stay crisp on a Retina display rather than being
-    /// a 16px bitmap doubled.
-    ///
-    /// `colour` is only for the flash, and it is what stops the image being a template: a template
-    /// is a mask, and a mask has no colour to give.
+    /// The app icon's cube at menu bar size, drawn per backing scale. A template image so AppKit
+    /// inverts it for the menu bar; `colour` is only for the flash, and a coloured image cannot be a
+    /// template because a template is a mask.
     private static func icon(_ colour: NSColor? = nil) -> NSImage {
         let side: CGFloat = 16
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
@@ -251,8 +201,7 @@ final class MenuBarController: NSObject {
             }
             path.close()
 
-            // From the nearest corner to the two near edges of the top face and straight down the
-            // front edge. Not to the top vertex: that draws a diagonal the cube does not have.
+            // The three edges meeting at the near corner, without which it reads as a hexagon.
             for corner in [vertex(-hw, hh), vertex(hw, hh), vertex(0, -r)] {
                 path.move(to: vertex(0, 0))
                 path.line(to: corner)

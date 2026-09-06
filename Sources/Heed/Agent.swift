@@ -60,6 +60,13 @@ final class Agent {
     private var hitTestCooldownUntil: Double = 0
     private var accessibilityLost = false
     private var lastResolvedName: String?
+    /// The last app other than Heed to come forward. A `heed://` URL activates Heed, so this is the
+    /// app a command arriving that way means.
+    private var lastForeignFront: pid_t?
+    /// The app a click brought forward, if any. Sampled as the activation arrives: the loop can
+    /// notice the handover long after, by when "how long since the last click" says nothing. Keyed
+    /// by pid so a stale answer cannot speak for the app that came forward next.
+    private var clickActivated: pid_t?
 
     private var now: Double { ProcessInfo.processInfo.systemUptime }
 
@@ -82,6 +89,7 @@ final class Agent {
             AXUIElementSetMessagingTimeout(systemWide, 0.1)
 
             isRunning = true
+            lastForeignFront = frontmostForFocus()
             scheduleTimer()
             syncMenuBar()
             Log.note("running: enabled=\(config.enabled) dwell=\(config.dwellMs)ms "
@@ -188,21 +196,39 @@ final class Agent {
         }
     }
 
-    /// Writes the same defaults key `defaults write` does, so the choice survives a restart.
     func toggleEnabled() {
-        queue.async { [self] in
-            let value = !config.enabled
-            config.enabled = value
-            Config.store().set(value, forKey: "enabled")
+        queue.async { [self] in applyEnabled(!config.enabled) }
+    }
 
-            forgetTarget()
-            if isRunning {
-                scheduleTimer()
-                seedPointerWindow()
-            }
+    func setEnabled(_ value: Bool) {
+        queue.async { [self] in applyEnabled(value) }
+    }
 
-            Log.note(value ? "enabled" : "disabled")
-            syncMenuBar()
+    /// Writes the same defaults key `defaults write` does, so the choice survives a restart.
+    private func applyEnabled(_ value: Bool) {
+        guard value != config.enabled else { return }
+        config.enabled = value
+        Config.store().set(value, forKey: "enabled")
+
+        forgetTarget()
+        if isRunning {
+            scheduleTimer()
+            seedPointerWindow()
+        }
+
+        Log.note(value ? "enabled" : "disabled")
+        syncMenuBar()
+    }
+
+    /// Everything another program can ask for, over the URL scheme or the command-line flags.
+    func perform(_ command: HeedCommand) {
+        switch command {
+        case .toggle: toggleEnabled()
+        case .enable: setEnabled(true)
+        case .disable: setEnabled(false)
+        case .focusStep(let delta): stepFocus(by: delta)
+        case .focusNumber(let number): focusWindow(number)
+        case .focusDirection(let direction): focusDirection(direction)
         }
     }
 
@@ -234,6 +260,7 @@ final class Agent {
 
     private enum Shortcut: CaseIterable {
         case toggle, focusNext, focusPrevious, focusWindow
+        case focusLeft, focusRight, focusUp, focusDown
 
         var which: String {
             switch self {
@@ -241,6 +268,8 @@ final class Agent {
             case .focusNext: "moves focus to the next window"
             case .focusPrevious: "moves focus to the previous window"
             case .focusWindow: "moves focus to a window by number"
+            case .focusLeft, .focusRight, .focusUp, .focusDown:
+                "moves focus \(direction?.rawValue ?? "")"
             }
         }
 
@@ -250,6 +279,10 @@ final class Agent {
             case .focusNext: "focusNextHotkey"
             case .focusPrevious: "focusPreviousHotkey"
             case .focusWindow: "focusWindowHotkey"
+            case .focusLeft: "focusLeftHotkey"
+            case .focusRight: "focusRightHotkey"
+            case .focusUp: "focusUpHotkey"
+            case .focusDown: "focusDownHotkey"
             }
         }
 
@@ -259,6 +292,20 @@ final class Agent {
             case .focusNext: \.focusNextHotkey
             case .focusPrevious: \.focusPreviousHotkey
             case .focusWindow: \.focusWindowHotkey
+            case .focusLeft: \.focusLeftHotkey
+            case .focusRight: \.focusRightHotkey
+            case .focusUp: \.focusUpHotkey
+            case .focusDown: \.focusDownHotkey
+            }
+        }
+
+        var direction: FocusDirection? {
+            switch self {
+            case .focusLeft: .left
+            case .focusRight: .right
+            case .focusUp: .up
+            case .focusDown: .down
+            default: nil
             }
         }
     }
@@ -278,6 +325,9 @@ final class Agent {
             return (1...9).compactMap { number in
                 spec.withKey("\(number)").map { ($0, { [weak self] in self?.focusWindow(number) }) }
             }
+        case .focusLeft, .focusRight, .focusUp, .focusDown:
+            guard let direction = shortcut.direction else { return nil }
+            return [(spec, { [weak self] in self?.focusDirection(direction) })]
         }
     }
 
@@ -432,7 +482,7 @@ final class Agent {
             machine.invalidate()
         }
 
-        let cursor = CGEvent(source: nil)?.location ?? lastCursor
+        var cursor = CGEvent(source: nil)?.location ?? lastCursor
         let moved = cursor != lastCursor
         motion.record(lastCursor.x.isFinite ? hypot(cursor.x - lastCursor.x, cursor.y - lastCursor.y) : 0)
         lastCursor = cursor
@@ -446,7 +496,8 @@ final class Agent {
         }
 
         // Before the machine can undo it: a forced hit test this tick would take focus straight back.
-        noteHandover()
+        // A warp moves the pointer out from under the position this tick read.
+        if let warped = noteHandover() { cursor = warped }
 
         let condition = currentCondition(cursorMoved: moved)
         if condition == .invalidating {
@@ -687,16 +738,19 @@ final class Agent {
     /// Ask, once a tick and before resolving the new pointer position, whether the window last under
     /// the pointer still holds focus. Movement cannot explain focus leaving a window Heed has not
     /// acted on yet.
-    private func noteHandover() {
+    @discardableResult
+    private func noteHandover() -> CGPoint? {
         handoverNotedThisTick = false
-        guard config.handoverGuard, pointerWindowKnown, sampleHandover() else { return }
+        guard config.handoverGuard, pointerWindowKnown, sampleHandover() else { return nil }
         handoverNotedThisTick = true
 
         Log.debug("focus was handed to \(frontmostName()); it keeps it until the pointer settles "
             + "somewhere else")
+        let warped = warpAfterHandover()
         // A dwell candidate formed before this must not land: the pre-apply revalidation uses the
         // raw hit test, which knows nothing about holds.
         machine.invalidate()
+        return warped
     }
 
     private func sampleHandover() -> Bool {
@@ -1028,6 +1082,84 @@ final class Agent {
         }
     }
 
+    // MARK: - Mouse follows focus
+
+    /// A click that brought an app forward left the pointer where the user put it. Its own grace,
+    /// because `clickGraceMs` is about pointer focus and may legitimately be zero.
+    private static let warpClickGrace: Double = 0.25
+
+    /// Move the pointer into a window that just took focus, so pointer focus and keyboard focus
+    /// agree rather than fight: the next hit test resolves the window that already has focus.
+    /// Returns where it landed, or nil when nothing moved.
+    private func warpPointer(into frame: CGRect, why: String) -> CGPoint? {
+        guard config.warpPointer else { return nil }
+        // No displays is a failed read, not a machine without screens: with nothing to clamp
+        // against, a stale frame would look as warpable as a real one.
+        let screens = screenFrames()
+        guard !screens.isEmpty else { return nil }
+
+        let cursor = CGEvent(source: nil)?.location ?? pointerLocation
+        guard let point = warpPoint(into: frame, xPercent: config.warpX, yPercent: config.warpY,
+                                    pointer: cursor, screens: screens)
+        else { return nil }
+
+        guard CGWarpMouseCursorPosition(point) == .success else {
+            // Recording a move that did not happen would read as the user throwing the mouse back
+            // across the screen on the next tick, and take focus with it.
+            Log.debug("the window server refused to move the pointer to "
+                + "\(Int(point.x)), \(Int(point.y))")
+            return nil
+        }
+        // Without this the system swallows mouse movement for about a quarter second after a warp.
+        CGAssociateMouseAndMouseCursorPosition(1)
+        Log.debug("warped the pointer to \(Int(point.x)), \(Int(point.y)): \(why)")
+
+        // Re-seeded, or the jump reads as the user moving the mouse on the next tick.
+        lastCursor = point
+        motion.reset()
+        let under = hitTest(at: point)
+        if hitTestAnswered { adoptPointerWindow(under) }
+        machine.invalidate()
+        return point
+    }
+
+    /// Follow focus that arrived without the pointer: Cmd-Tab, an app activating, a window picked
+    /// from Raycast. The hold this tick just declared is re-declared around the new position, so
+    /// the pointer has to leave the window it was put in before focus can move again.
+    private func warpAfterHandover() -> CGPoint? {
+        guard config.warpPointer,
+              let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != ownPid
+        else { return nil }
+
+        // Never out of a drag, and never off a click: this is for focus the keyboard moved. The two
+        // click tests cover each other: the sampled one is right however late the loop gets here,
+        // and the elapsed one covers a click the activation observer has not caught up with yet.
+        guard clickActivated != front.processIdentifier, NSEvent.pressedMouseButtons == 0,
+              secondsSinceAny(of: Agent.deliberateMouseEvents) >= Agent.warpClickGrace
+        else { return nil }
+
+        guard let window = axElement(appElement(for: front.processIdentifier), kAXFocusedWindowAttribute),
+              let frame = axFrame(window)
+        else { return nil }
+
+        // Raycast's own palette is an excluded bundle, so opening it never drags the cursor onto it.
+        let candidate = windowCandidate(window, size: frame.size,
+                                        title: axString(window, kAXTitleAttribute),
+                                        bundleID: front.bundleIdentifier)
+        if case let .reject(why) = evaluate(candidate, policy: config.windowPolicy) {
+            Log.debug("not warping to \(front.describedAs): \(why)")
+            return nil
+        }
+
+        guard let point = warpPointer(into: frame, why: "focus was handed to \(front.describedAs)")
+        else { return nil }
+        handover.noteKeyboardFocus(anchor: anchor(for: lastPointerWindow),
+                                   number: windowNumber(under: point), pointer: point,
+                                   owner: front.processIdentifier)
+        return point
+    }
+
     // MARK: - Focus ring
 
     /// Move keyboard focus around the ring of visible windows. Runs whether or not Heed is
@@ -1041,7 +1173,7 @@ final class Agent {
 
             guard let ring = focusRing() else { return }
             let windows = ring.windows
-            let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let front = frontmostForFocus()
             let live = liveFocusIndex(in: windows, frontmost: front)
             guard let index = choose(ring, live, front) else { return }
 
@@ -1074,12 +1206,20 @@ final class Agent {
             lastStep = (from: live.map { windows[$0] }, to: target)
             lastStepAt = now
 
+            // The pointer moves before the hold is declared, so the hold anchors where it lands.
+            // Read again rather than reusing the ring's frame: the window can have moved, and a
+            // warp into where it used to be would put the pointer on some other window.
+            let warped = axFrame(window).flatMap {
+                warpPointer(into: $0, why: "\(what) to \(target.describedAs)")
+            }
+
             // A step between two windows of the frontmost app changes nothing `noteHandover` can
             // see, so the hold is declared here.
             if config.handoverGuard {
                 handover.noteKeyboardFocus(
-                    anchor: anchor(for: lastPointerWindow), number: number,
-                    pointer: cursor, owner: target.pid
+                    anchor: anchor(for: lastPointerWindow),
+                    number: warped.map { windowNumber(under: $0) } ?? number,
+                    pointer: warped ?? cursor, owner: target.pid
                 )
             }
             machine.invalidate()
@@ -1106,6 +1246,32 @@ final class Agent {
 
             guard let index = ringStep(count: windows.count, from: from, by: delta) else {
                 Log.debug("focus step ignored: no windows in the ring")
+                return nil
+            }
+            return index
+        }
+    }
+
+    /// Focus the nearest window in a direction, starting from the one that has focus.
+    private func focusDirection(_ direction: FocusDirection) {
+        moveFocus("focus \(direction.rawValue)") { [self] ring, live, front in
+            let windows = ring.windows
+            // The same start as a ring step, so a held key advances and focus on something the ring
+            // cannot name steps from where that app sits.
+            let recent = now - lastStepAt < 1 ? lastStep : nil
+            let source = ringStart(in: windows, live: live, lastStep: recent)
+                ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
+            guard let source else {
+                Log.debug("focus \(direction.rawValue): focus is on nothing the ring can name, "
+                    + "so there is no telling where to step from")
+                return nil
+            }
+
+            // Ring order is the tie-break, so equally near windows resolve the way the ring runs.
+            let candidates = windows.enumerated().map { RingWindow(frame: $1.frame, key: $0) }
+            guard let index = directionalStep(from: windows[source].frame, in: candidates, direction)
+            else {
+                Log.debug("focus \(direction.rawValue): no window that way")
                 return nil
             }
             return index
@@ -1209,6 +1375,23 @@ final class Agent {
         return nil
     }
 
+    /// Whose focus a shortcut should step from. Heed itself is never the answer: a `heed://` URL
+    /// brings it forward, and the app it took the front from is the one the command is about.
+    private func frontmostForFocus() -> pid_t? {
+        guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ownPid,
+              !isExcluded(front.bundleIdentifier)
+        else { return lastForeignFront }
+        lastForeignFront = front.processIdentifier
+        return front.processIdentifier
+    }
+
+    /// Raycast and the rest of the overlay apps are never a window a shortcut steps from: their
+    /// palette is what the command was typed into.
+    private func isExcluded(_ bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return config.excludedBundleIDs.contains(bundleID)
+    }
+
     /// Which ring entry holds focus, or nil when focus is on something the ring does not contain.
     private func liveFocusIndex(in ring: [Target], frontmost front: pid_t?) -> Int? {
         guard let front, front != ownPid,
@@ -1297,6 +1480,23 @@ final class Agent {
         }
 
         center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.processIdentifier != ownPid
+            else { return }
+            let pid = app.processIdentifier
+            let bundleID = app.bundleIdentifier
+            let byClick = secondsSinceAny(of: Agent.deliberateMouseEvents) < Agent.warpClickGrace
+            queue.async {
+                self.clickActivated = byClick ? pid : nil
+                guard !self.isExcluded(bundleID) else { return }
+                self.lastForeignFront = pid
+            }
+        }
+
+        center.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let self,
@@ -1308,6 +1508,8 @@ final class Agent {
                 self.blockedUntil[pid] = nil
                 self.failureCounts[pid] = nil
                 self.handover.forget(owner: pid)
+                if self.lastForeignFront == pid { self.lastForeignFront = nil }
+                if self.clickActivated == pid { self.clickActivated = nil }
             }
         }
 
@@ -1328,6 +1530,24 @@ final class Agent {
             guard let context else { return }
             Unmanaged<Agent>.fromOpaque(context).takeUnretainedValue().invalidateFromSystemEvent()
         }, Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    /// Commands from a second copy of the binary, which cannot reach this process's state. Any
+    /// process in the login session can post one; they toggle Heed and move focus, nothing more.
+    func observeCommands() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(commandNotification), object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let text = note.object as? String else { return }
+            guard let command = parseCommand(text) else {
+                // Anything in the session can post one, so it is quoted short and on one line.
+                let quoted = text.prefix(40).map { $0.isNewline ? " " : $0 }
+                Log.note("ignoring a command I do not understand: \"\(String(quoted))\"")
+                return
+            }
+            Log.debug("command: \(text)")
+            perform(command)
+        }
     }
 
     /// Installed before the Accessibility gate; otherwise SIGHUP kept its default disposition while

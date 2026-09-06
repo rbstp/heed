@@ -25,6 +25,20 @@
 	<!-- Background agent: no Dock icon and no window. The menu bar item is its only UI. -->
 	<key>LSUIElement</key>
 	<true/>
+	<!-- heed://focus/next and the rest, so another launcher can drive Heed without a hotkey. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>@BUNDLE_ID@</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>heed</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT</string>
 </dict>

@@ -46,6 +46,37 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
 - **Control+Command+1** to **9** moves keyboard focus to the window with that number, counted in
   the same order: with Zen on the left and a terminal on the right, 1 is Zen and 2 is the terminal. A
   number with no window on it does nothing.
+- **Directional focus** moves to the nearest window left, right, up, or down of the focused one.
+  Off by default, because each shortcut Heed registers is taken away from every other app:
+
+  ```sh
+  defaults write io.github.rbstp.heed focusLeftHotkey 'cmd+ctrl+alt+h'
+  defaults write io.github.rbstp.heed focusDownHotkey 'cmd+ctrl+alt+j'
+  defaults write io.github.rbstp.heed focusUpHotkey 'cmd+ctrl+alt+k'
+  defaults write io.github.rbstp.heed focusRightHotkey 'cmd+ctrl+alt+l'
+  make restart
+  ```
+
+  A window sharing a row or column with the focused one wins over a closer one that does not, and
+  the edge of the arrangement is a dead end rather than a wrap. Pair it with a tiling shortcut:
+  Raycast's halves and quarters put the windows where these then move between.
+
+## Mouse follows focus
+
+Focus moved by keyboard leaves the pointer over the window you just left, and the next flick of the
+mouse drags focus back there. Turn it around and the pointer follows focus into the new window:
+
+```sh
+defaults write io.github.rbstp.heed warpPointer -bool true
+make restart
+```
+
+It moves on Command-Tab, on the focus shortcuts, on a window picked from Raycast's Switch Windows,
+and on any other keyboard-driven activation. It does not move for a click, mid-drag, into a window
+Heed would not focus by pointer, or when the pointer is already inside the window. `warpX` and
+`warpY` place it inside the window as percentages; the default is the centre.
+
+Off by default, and it needs `handoverGuard` on, which it is by default.
 
 Change or disable the shortcuts:
 
@@ -75,6 +106,44 @@ defaults write io.github.rbstp.heed menuBarIcon -bool false
 make restart
 ```
 
+## Drive it from somewhere else
+
+Every shortcut Heed registers is taken away from every other app, so it can also be driven without
+registering anything. A URL reaches the running agent directly:
+
+```sh
+open 'heed://focus/next'
+open 'heed://focus/left'
+open 'heed://focus/3'
+open 'heed://toggle'      # also enable, disable
+```
+
+The same vocabulary as flags on the installed binary:
+
+```sh
+~/Applications/Heed.app/Contents/MacOS/Heed --focus next
+~/Applications/Heed.app/Contents/MacOS/Heed --toggle
+~/Applications/Heed.app/Contents/MacOS/Heed --on
+```
+
+### With Raycast
+
+Raycast already tiles and switches windows; Heed adds the pointer. Give Raycast the hotkey and let
+Heed claim nothing:
+
+1. Create a Quicklink to `heed://focus/next` and assign it a hotkey.
+2. Free the combination Heed holds: `defaults write io.github.rbstp.heed focusNextHotkey ''`, then
+   `make restart`.
+
+Turning `warpPointer` on is what makes Raycast's own Switch Windows move the pointer too, since that
+is a keyboard-driven focus change like any other.
+
+The flags reach the running agent over a distributed notification, which any process in your login
+session can post and read. Heed holds Accessibility permission, so anything in your session can
+switch it off or move focus around while it runs. The vocabulary is fixed at toggle-and-focus: it
+takes no arbitrary arguments, carries no window contents, and reads nothing back. If that is not a
+trade you want, leave the commands alone and use the hotkeys; nothing else in Heed listens.
+
 ## Behavior
 
 Heed follows the pointer but avoids the common focus fights:
@@ -89,6 +158,9 @@ Heed follows the pointer but avoids the common focus fights:
 - Floating panels and other transient windows are not pointer focus targets.
 - The focus shortcuts cycle visible windows in spatial order, not stacking order, so stepping through
   them does not reorder the cycle.
+- Directional focus never wraps: running out of windows in a direction does nothing.
+- With `warpPointer` on, the pointer follows keyboard-driven focus into the new window, and the
+  window it lands in holds focus until the pointer leaves it.
 
 macOS does not separate focus from raising across applications: focusing another app brings it
 forward. The `raise` setting only orders windows within an app.
@@ -105,6 +177,13 @@ Settings live in the `io.github.rbstp.heed` defaults domain. Restart Heed after 
 | `focusNextHotkey` | `cmd+ctrl+right` | Move focus to the next window. Empty to disable. |
 | `focusPreviousHotkey` | `cmd+ctrl+left` | Move focus to the previous window. Empty to disable. |
 | `focusWindowHotkey` | `cmd+ctrl+1` | Move focus to window 1; the same modifiers with 2 to 9 reach the others. Empty to disable. |
+| `focusLeftHotkey` | off | Move focus to the nearest window to the left. |
+| `focusRightHotkey` | off | Move focus to the nearest window to the right. |
+| `focusUpHotkey` | off | Move focus to the nearest window above. |
+| `focusDownHotkey` | off | Move focus to the nearest window below. |
+| `warpPointer` | `false` | Move the pointer into a window that took keyboard focus. |
+| `warpX` | `50` | Where in that window the pointer lands, as a percentage across. |
+| `warpY` | `50` | Where in that window the pointer lands, as a percentage down. |
 | `dwellMs` | `0` | Time the pointer must rest before focus changes. Try `200` if instant is too eager. |
 | `pollMs` | `40` | Pointer sampling interval while active. |
 | `idlePollMs` | `1000` | Heartbeat while idle. Mouse movement wakes the fast loop. |

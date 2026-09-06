@@ -123,3 +123,20 @@ final class WarpPlanTests: XCTestCase {
                        CGPoint(x: 500, y: 400))
     }
 }
+
+extension WarpPlanTests {
+    /// Accessibility can report a window at no position at all, and NaN defeats every comparison:
+    /// the rect is neither null nor empty, and the clamp would carry the NaN through.
+    func testANonFiniteFrameMeansNoWarp() {
+        let noOrigin = CGRect(x: CGFloat.nan, y: 100, width: 800, height: 600)
+        XCTAssertFalse(noOrigin.isNull || noOrigin.isEmpty, "the guard cannot lean on isNull")
+        XCTAssertNil(point(noOrigin, pointer: CGPoint(x: 1_800, y: 900)))
+        XCTAssertNil(point(CGRect(x: 100, y: CGFloat.nan, width: 800, height: 600)))
+        XCTAssertNil(point(CGRect(x: 100, y: 100, width: CGFloat.infinity, height: 600)))
+    }
+
+    func testANonFinitePointerIsTreatedAsUnknown() {
+        let window = CGRect(x: 100, y: 100, width: 800, height: 600)
+        XCTAssertEqual(point(window, pointer: CGPoint(x: CGFloat.nan, y: CGFloat.nan)), CGPoint(x: 500, y: 400))
+    }
+}

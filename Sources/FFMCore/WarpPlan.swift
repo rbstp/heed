@@ -10,9 +10,10 @@ import Foundation
 public func warpPoint(
     into frame: CGRect, xPercent: Int, yPercent: Int, pointer: CGPoint?, screens: [CGRect]
 ) -> CGPoint? {
-    guard !frame.isNull, !frame.isEmpty, frame.width.isFinite, frame.height.isFinite else {
-        return nil
-    }
+    guard !frame.isNull, !frame.isEmpty,
+          frame.origin.x.isFinite, frame.origin.y.isFinite,
+          frame.width.isFinite, frame.height.isFinite
+    else { return nil }
     if let pointer, pointer.x.isFinite, pointer.y.isFinite, frame.contains(pointer) { return nil }
 
     let visible = visiblePart(of: frame, on: screens)

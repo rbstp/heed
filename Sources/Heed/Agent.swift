@@ -63,12 +63,10 @@ final class Agent {
     /// The last app other than Heed to come forward. A `heed://` URL activates Heed, so this is the
     /// app a command arriving that way means.
     private var lastForeignFront: pid_t?
-    /// The app the pointer was last warped into, or last declined for. Focus noticed again for the
-    /// same app is the same arrival, not a new one to chase.
-    private var lastWarpFront: pid_t?
-    /// Whether a click brought the front app forward. Sampled as the activation arrives: the loop
-    /// can notice the handover long after, by when "how long since the last click" says nothing.
-    private var frontArrivedByClick = false
+    /// The app a click brought forward, if any. Sampled as the activation arrives: the loop can
+    /// notice the handover long after, by when "how long since the last click" says nothing. Keyed
+    /// by pid so a stale answer cannot speak for the app that came forward next.
+    private var clickActivated: pid_t?
 
     private var now: Double { ProcessInfo.processInfo.systemUptime }
 
@@ -1095,12 +1093,23 @@ final class Agent {
     /// Returns where it landed, or nil when nothing moved.
     private func warpPointer(into frame: CGRect, why: String) -> CGPoint? {
         guard config.warpPointer else { return nil }
+        // No displays is a failed read, not a machine without screens: with nothing to clamp
+        // against, a stale frame would look as warpable as a real one.
+        let screens = screenFrames()
+        guard !screens.isEmpty else { return nil }
+
         let cursor = CGEvent(source: nil)?.location ?? pointerLocation
         guard let point = warpPoint(into: frame, xPercent: config.warpX, yPercent: config.warpY,
-                                    pointer: cursor, screens: screenFrames())
+                                    pointer: cursor, screens: screens)
         else { return nil }
 
-        CGWarpMouseCursorPosition(point)
+        guard CGWarpMouseCursorPosition(point) == .success else {
+            // Recording a move that did not happen would read as the user throwing the mouse back
+            // across the screen on the next tick, and take focus with it.
+            Log.debug("the window server refused to move the pointer to "
+                + "\(Int(point.x)), \(Int(point.y))")
+            return nil
+        }
         // Without this the system swallows mouse movement for about a quarter second after a warp.
         CGAssociateMouseAndMouseCursorPosition(1)
         Log.debug("warped the pointer to \(Int(point.x)), \(Int(point.y)): \(why)")
@@ -1120,13 +1129,13 @@ final class Agent {
     private func warpAfterHandover() -> CGPoint? {
         guard config.warpPointer,
               let front = NSWorkspace.shared.frontmostApplication,
-              front.processIdentifier != ownPid,
-              lastWarpFront != front.processIdentifier
+              front.processIdentifier != ownPid
         else { return nil }
-        lastWarpFront = front.processIdentifier
 
-        // Never out of a drag, and never off a click: this is for focus the keyboard moved.
-        guard !frontArrivedByClick, NSEvent.pressedMouseButtons == 0,
+        // Never out of a drag, and never off a click: this is for focus the keyboard moved. The two
+        // click tests cover each other: the sampled one is right however late the loop gets here,
+        // and the elapsed one covers a click the activation observer has not caught up with yet.
+        guard clickActivated != front.processIdentifier, NSEvent.pressedMouseButtons == 0,
               secondsSinceAny(of: Agent.deliberateMouseEvents) >= Agent.warpClickGrace
         else { return nil }
 
@@ -1198,8 +1207,11 @@ final class Agent {
             lastStepAt = now
 
             // The pointer moves before the hold is declared, so the hold anchors where it lands.
-            lastWarpFront = target.pid
-            let warped = warpPointer(into: target.frame, why: "\(what) to \(target.describedAs)")
+            // Read again rather than reusing the ring's frame: the window can have moved, and a
+            // warp into where it used to be would put the pointer on some other window.
+            let warped = axFrame(window).flatMap {
+                warpPointer(into: $0, why: "\(what) to \(target.describedAs)")
+            }
 
             // A step between two windows of the frontmost app changes nothing `noteHandover` can
             // see, so the hold is declared here.
@@ -1366,11 +1378,18 @@ final class Agent {
     /// Whose focus a shortcut should step from. Heed itself is never the answer: a `heed://` URL
     /// brings it forward, and the app it took the front from is the one the command is about.
     private func frontmostForFocus() -> pid_t? {
-        guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              front != ownPid
+        guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ownPid,
+              !isExcluded(front.bundleIdentifier)
         else { return lastForeignFront }
-        lastForeignFront = front
-        return front
+        lastForeignFront = front.processIdentifier
+        return front.processIdentifier
+    }
+
+    /// Raycast and the rest of the overlay apps are never a window a shortcut steps from: their
+    /// palette is what the command was typed into.
+    private func isExcluded(_ bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return config.excludedBundleIDs.contains(bundleID)
     }
 
     /// Which ring entry holds focus, or nil when focus is on something the ring does not contain.
@@ -1468,12 +1487,12 @@ final class Agent {
                   app.processIdentifier != ownPid
             else { return }
             let pid = app.processIdentifier
+            let bundleID = app.bundleIdentifier
             let byClick = secondsSinceAny(of: Agent.deliberateMouseEvents) < Agent.warpClickGrace
             queue.async {
+                self.clickActivated = byClick ? pid : nil
+                guard !self.isExcluded(bundleID) else { return }
                 self.lastForeignFront = pid
-                self.frontArrivedByClick = byClick
-                // Another app coming forward makes the next arrival of this one a new one.
-                if self.lastWarpFront != pid { self.lastWarpFront = nil }
             }
         }
 
@@ -1490,7 +1509,7 @@ final class Agent {
                 self.failureCounts[pid] = nil
                 self.handover.forget(owner: pid)
                 if self.lastForeignFront == pid { self.lastForeignFront = nil }
-                if self.lastWarpFront == pid { self.lastWarpFront = nil }
+                if self.clickActivated == pid { self.clickActivated = nil }
             }
         }
 
@@ -1521,7 +1540,9 @@ final class Agent {
         ) { [weak self] note in
             guard let self, let text = note.object as? String else { return }
             guard let command = parseCommand(text) else {
-                Log.note("ignoring a command I do not understand: \(text)")
+                // Anything in the session can post one, so it is quoted short and on one line.
+                let quoted = text.prefix(40).map { $0.isNewline ? " " : $0 }
+                Log.note("ignoring a command I do not understand: \"\(String(quoted))\"")
                 return
             }
             Log.debug("command: \(text)")

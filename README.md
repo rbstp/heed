@@ -139,8 +139,10 @@ Turning `warpPointer` on is what makes Raycast's own Switch Windows move the poi
 is a keyboard-driven focus change like any other.
 
 The flags reach the running agent over a distributed notification, which any process in your login
-session can post and read. The vocabulary is toggle-and-focus only: it carries no window contents
-and reads nothing back.
+session can post and read. Heed holds Accessibility permission, so anything in your session can
+switch it off or move focus around while it runs. The vocabulary is fixed at toggle-and-focus: it
+takes no arbitrary arguments, carries no window contents, and reads nothing back. If that is not a
+trade you want, leave the commands alone and use the hotkeys; nothing else in Heed listens.
 
 ## Behavior
 

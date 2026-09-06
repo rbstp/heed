@@ -12,7 +12,8 @@ public enum HeedCommand: Equatable, Sendable {
     case focusNumber(Int)
     case focusDirection(FocusDirection)
 
-    /// The canonical wire form, `focus/next` or `toggle`, which `parseCommand` reads back.
+    /// The wire form, `focus/next` or `toggle`. `parseCommand` reads back everything it produces;
+    /// a value it never produces, `focusNumber(10)`, does not survive the round trip.
     public var written: String {
         switch self {
         case .toggle: "toggle"

@@ -149,18 +149,21 @@ final class MenuBarController: NSObject {
         item.button?.image = MenuBarController.symbol(state.symbolName, colour: colour)
     }
 
-    /// An SF Symbol at menu bar weight. A template unless coloured; a template is a mask, so the
-    /// flash colour has to be drawn into the image rather than tinted onto it.
+    /// The symbol as AppKit ships it, at the size and alignment it means for a menu bar; sizing it
+    /// by hand leaves the alignment rect behind and the glyph is drawn off centre and clipped. A
+    /// template unless coloured; a template is a mask, so the flash colour has to be drawn into the
+    /// image rather than tinted onto it.
     private static func symbol(_ name: String, colour: NSColor?) -> NSImage {
-        var configuration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        if let colour {
-            configuration = configuration.applying(.init(paletteColors: [colour]))
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else {
+            return NSImage()
         }
-        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(configuration)
-        else { return NSImage() }
-        image.isTemplate = colour == nil
-        return image
+        guard let colour else {
+            image.isTemplate = true
+            return image
+        }
+        let coloured = image.withSymbolConfiguration(.init(paletteColors: [colour])) ?? image
+        coloured.isTemplate = false
+        return coloured
     }
 
     private static func modifierMask(_ spec: HotkeySpec) -> NSEvent.ModifierFlags {

@@ -438,8 +438,12 @@ final class Agent {
         lastCursor = cursor
         pointerMovedThisTick = moved
         // Asked before the guards: a pointer leaving the window it was handed from is readable
-        // whether or not this tick may act on it.
-        if config.handoverGuard, cursor.x.isFinite { handover.notePointer(cursor) }
+        // whether or not this tick may act on it. Only when the pointer moved, which is both a
+        // window server round trip saved and the point of the question: a window arriving under a
+        // pointer that has not moved is not the pointer leaving.
+        if config.handoverGuard, handover.isHolding, moved, cursor.x.isFinite {
+            handover.notePointer(cursor, under: windowNumber(under: cursor))
+        }
 
         // Before the machine can undo it: a forced hit test this tick would take focus straight back.
         noteHandover()
@@ -700,7 +704,7 @@ final class Agent {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         return handover.sample(
             window: window, hasFocus: window.map { focusMatches($0) }, anchor: anchor(for: window),
-            region: region(for: window), pointer: pointerLocation,
+            number: windowNumber(under: pointerLocation), pointer: pointerLocation,
             owner: front == ownPid ? nil : front, pointerMoved: false
         )
     }
@@ -724,10 +728,13 @@ final class Agent {
         window?.window == nil ? nil : window
     }
 
-    /// Where an anchor's window is, for judging that the pointer left it without a hit test.
-    private func region(for window: Target?) -> CGRect? {
-        guard let frame = anchor(for: window)?.frame, !frame.isNull, !frame.isEmpty else { return nil }
-        return frame
+    /// The window the window server has under the pointer, ignoring anything above the ordinary
+    /// level. Its number identifies the window the pointer is on when no hit test may run.
+    private func windowNumber(under point: CGPoint?) -> Int? {
+        guard let point else { return nil }
+        return onScreenWindows().first {
+            $0.level == 0 && $0.pid != ownPid && $0.frame.contains(point)
+        }?.number
     }
 
     /// Record the newly resolved window as the next comparison's baseline, except on the tick a hold
@@ -740,7 +747,7 @@ final class Agent {
 
         handover.sample(
             window: window, hasFocus: nil, anchor: anchor(for: window),
-            region: region(for: window), pointer: pointerLocation, owner: front, pointerMoved: true
+            number: nil, pointer: pointerLocation, owner: front, pointerMoved: true
         )
     }
 
@@ -1049,6 +1056,8 @@ final class Agent {
             let cursor = CGEvent(source: nil)?.location ?? pointerLocation
             let under = cursor.flatMap { hitTest(at: $0) }
             if hitTestAnswered { adoptPointerWindow(under) }
+            // Before the focus is applied: raising the target can put it under the pointer.
+            let number = cursor.flatMap { windowNumber(under: $0) }
 
             guard applyFocus(to: target, followingPointer: false) else { return }
             // Recorded even when the app refused the window, so the shortcut walks past such
@@ -1060,7 +1069,7 @@ final class Agent {
             // see, so the hold is declared here.
             if config.handoverGuard {
                 handover.noteKeyboardFocus(
-                    anchor: anchor(for: lastPointerWindow), region: region(for: lastPointerWindow),
+                    anchor: anchor(for: lastPointerWindow), number: number,
                     pointer: cursor, owner: target.pid
                 )
             }

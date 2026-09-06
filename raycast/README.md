@@ -47,6 +47,8 @@ channel is one way: Heed answers nothing back, so a command reports what it aske
 what came of it, and a command sent to a Heed that is not running launches it first.
 
 Search Windows is the one that reads rather than writes. It runs `Heed --windows`, which builds the
-list from the window server and Accessibility on the spot, so the list is a real answer.
+list from the window server and Accessibility on the spot, so the list is a real answer. Picking a
+window asks for it by the window server's own number, so a window opening or closing while the list
+is on screen cannot make it focus the wrong one.
 
 Nothing is installed alongside the extension.

@@ -119,6 +119,8 @@ open 'heed://toggle'      # also enable, disable
 ```
 
 Window numbers past 9 work here even though the shortcuts stop at the digit keys.
+`heed://focus/id/<n>` takes the window server's own number instead, the `id` field of `--windows`:
+a place in the ring is only true of the ring it came from, and Heed rebuilds that ring every time.
 
 The same vocabulary as flags on the installed binary:
 
@@ -136,7 +138,8 @@ else can show the list and pick from it:
 ```
 
 It reads the windows for itself rather than asking the running agent, so it answers whether or not
-Heed is running, and it needs the same Accessibility permission.
+Heed is running, and it needs the same Accessibility permission. Focus one of them back by its `id`
+rather than its `number`, which is only that snapshot's ordering.
 
 ### With Raycast
 

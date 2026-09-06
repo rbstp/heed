@@ -8,12 +8,14 @@ public enum HeedCommand: Equatable, Sendable {
     case disable
     /// One step around the focus ring; forward for a positive delta.
     case focusStep(Int)
-    /// A window by its number in ring order, 1 to 9.
+    /// A window by its place in ring order.
     case focusNumber(Int)
+    /// A window by the number the window server gives it, which survives the ring being rebuilt.
+    case focusWindowID(Int)
     case focusDirection(FocusDirection)
 
-    /// The wire form, `focus/next` or `toggle`. `parseCommand` reads back everything it produces;
-    /// a value it never produces, `focusNumber(10)`, does not survive the round trip.
+    /// The wire form, `focus/next` or `toggle`. `parseCommand` reads back every command it can
+    /// produce; a number outside what it accepts does not survive the round trip.
     public var written: String {
         switch self {
         case .toggle: "toggle"
@@ -21,6 +23,7 @@ public enum HeedCommand: Equatable, Sendable {
         case .disable: "disable"
         case .focusStep(let delta): delta >= 0 ? "focus/next" : "focus/previous"
         case .focusNumber(let number): "focus/\(number)"
+        case .focusWindowID(let id): "focus/id/\(id)"
         case .focusDirection(let direction): "focus/\(direction.rawValue)"
         }
     }
@@ -45,6 +48,10 @@ public func parseCommand(path: [String]) -> HeedCommand? {
     case "disable", "off":
         return segments.count == 1 ? .disable : nil
     case "focus":
+        if segments.count == 3, segments[1] == "id" {
+            guard let id = number(segments[2], upTo: Int.max) else { return nil }
+            return .focusWindowID(id)
+        }
         guard segments.count == 2 else { return nil }
         return parseFocus(segments[1])
     default:
@@ -63,10 +70,7 @@ private func parseFocus(_ what: String) -> HeedCommand? {
     }
     if let direction = FocusDirection(rawValue: what) { return .focusDirection(direction) }
     // Past 9 as well: the shortcuts stop at the digit keys, a window picked from a list does not.
-    guard what.allSatisfy(\.isNumber), let number = Int(what), (1...99).contains(number) else {
-        return nil
-    }
-    return .focusNumber(number)
+    return number(what, upTo: 999).map { .focusNumber($0) }
 }
 
 /// The command a `heed://` URL asks for: `heed://focus/next`, `heed://toggle`.
@@ -92,4 +96,13 @@ public func commandLineRequest(_ arguments: [String]) -> CommandLineRequest {
     let path = [String(flag.dropFirst(2))] + arguments[arguments.index(after: index)...].prefix(1)
     guard let command = parseCommand(path: path) else { return .unknown(flag) }
     return .command(command)
+}
+
+/// A positive number written in plain digits. `Int` alone would take a sign, spaces, and digits
+/// from scripts nothing here produces.
+private func number(_ text: String, upTo limit: Int) -> Int? {
+    guard !text.isEmpty, text.allSatisfy({ $0.isASCII && $0.isNumber }), let value = Int(text),
+          (1...limit).contains(value)
+    else { return nil }
+    return value
 }

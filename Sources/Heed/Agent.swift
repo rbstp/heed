@@ -441,7 +441,7 @@ final class Agent {
         // whether or not this tick may act on it. Only when the pointer moved, which is both a
         // window server round trip saved and the point of the question: a window arriving under a
         // pointer that has not moved is not the pointer leaving.
-        if config.handoverGuard, handover.isHolding, moved, cursor.x.isFinite {
+        if config.handoverGuard, moved, cursor.x.isFinite, holdingApplies {
             handover.notePointer(cursor, under: windowNumber(under: cursor))
         }
 
@@ -717,6 +717,15 @@ final class Agent {
         guard !pointerWindowKnown else { return }
         pointerWindowKnown = true
         if config.handoverGuard { _ = sampleHandover() }
+    }
+
+    /// Whether a hold could act on this tick at all: only the frontmost app's is ever consulted, so
+    /// asking the window server about the pointer for any other is work nothing can use.
+    private var holdingApplies: Bool {
+        guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+            return false
+        }
+        return front != ownPid && handover.isHolding(owner: front)
     }
 
     /// The pointer as a hold should record it. Nil until a tick has read it: a position that is not

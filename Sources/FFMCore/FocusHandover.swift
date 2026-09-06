@@ -220,11 +220,12 @@ public struct FocusHandover<Target: Equatable> {
     }
 
     /// Baseline after the agent moved focus with the pointer, so the owner change on the next tick is
-    /// not read as a handover.
+    /// not read as a handover. The pointer settling somewhere is what every hold was waiting for, so
+    /// they all go, rather than accumulating for apps that never come forward again.
     public mutating func noteAppliedFocus(window: Target, owner: Int32) {
         last = Observation(window: window, hasFocus: true, owner: owner)
-        holds[owner] = nil
-        if pending?.owner == owner { pending = nil }
+        holds = [:]
+        pending = nil
     }
 
     public mutating func reset() {

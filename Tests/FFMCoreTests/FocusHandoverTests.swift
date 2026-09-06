@@ -559,6 +559,24 @@ final class FocusHandoverTests: XCTestCase {
         XCTAssertTrue(handover.isHolding)
     }
 
+    /// Focus taken by the pointer is what every hold was waiting for, however many apps were
+    /// holding: one left behind would apply again the next time its app came forward.
+    func testFocusTakenByThePointerSpendsEveryHold() {
+        var handover = handedOver()
+        handover.sample(window: "B", hasFocus: true, anchor: "B", number: windowB, pointer: resting,
+                        owner: 300, pointerMoved: false)
+        XCTAssertTrue(handover.sample(window: "B", hasFocus: false, anchor: "B", number: windowB,
+                                      pointer: resting, owner: 400, pointerMoved: false))
+        XCTAssertTrue(handover.isHolding(owner: 200))
+        XCTAssertTrue(handover.isHolding(owner: 400))
+
+        handover.noteAppliedFocus(window: "C", owner: 500)
+
+        XCTAssertFalse(handover.isHolding)
+        XCTAssertFalse(handover.isSettling)
+        XCTAssertEqual(decide(&handover, "A", frontmost: 200, at: 0), .free)
+    }
+
     // MARK: - Giving up
 
     func testAbandoningAContestKeepsTheHold() {

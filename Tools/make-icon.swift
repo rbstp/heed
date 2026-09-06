@@ -34,7 +34,8 @@ backdrop.draw(in: NSBezierPath(roundedRect: tile, xRadius: radius, yRadius: radi
 
 let configuration = NSImage.SymbolConfiguration(pointSize: side * 0.46, weight: .regular)
     .applying(.init(paletteColors: [.white]))
-guard let symbol = NSImage(systemSymbolName: "cursorarrow.rays", accessibilityDescription: nil)?
+let name = "cursorarrow.motionlines"
+guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
     .withSymbolConfiguration(configuration)
 else { exit(1) }
 symbol.isTemplate = false

@@ -234,6 +234,7 @@ final class Agent {
 
     private enum Shortcut: CaseIterable {
         case toggle, focusNext, focusPrevious, focusWindow
+        case focusLeft, focusRight, focusUp, focusDown
 
         var which: String {
             switch self {
@@ -241,6 +242,8 @@ final class Agent {
             case .focusNext: "moves focus to the next window"
             case .focusPrevious: "moves focus to the previous window"
             case .focusWindow: "moves focus to a window by number"
+            case .focusLeft, .focusRight, .focusUp, .focusDown:
+                "moves focus \(direction?.rawValue ?? "")"
             }
         }
 
@@ -250,6 +253,10 @@ final class Agent {
             case .focusNext: "focusNextHotkey"
             case .focusPrevious: "focusPreviousHotkey"
             case .focusWindow: "focusWindowHotkey"
+            case .focusLeft: "focusLeftHotkey"
+            case .focusRight: "focusRightHotkey"
+            case .focusUp: "focusUpHotkey"
+            case .focusDown: "focusDownHotkey"
             }
         }
 
@@ -259,6 +266,20 @@ final class Agent {
             case .focusNext: \.focusNextHotkey
             case .focusPrevious: \.focusPreviousHotkey
             case .focusWindow: \.focusWindowHotkey
+            case .focusLeft: \.focusLeftHotkey
+            case .focusRight: \.focusRightHotkey
+            case .focusUp: \.focusUpHotkey
+            case .focusDown: \.focusDownHotkey
+            }
+        }
+
+        var direction: FocusDirection? {
+            switch self {
+            case .focusLeft: .left
+            case .focusRight: .right
+            case .focusUp: .up
+            case .focusDown: .down
+            default: nil
             }
         }
     }
@@ -278,6 +299,9 @@ final class Agent {
             return (1...9).compactMap { number in
                 spec.withKey("\(number)").map { ($0, { [weak self] in self?.focusWindow(number) }) }
             }
+        case .focusLeft, .focusRight, .focusUp, .focusDown:
+            guard let direction = shortcut.direction else { return nil }
+            return [(spec, { [weak self] in self?.focusDirection(direction) })]
         }
     }
 
@@ -1106,6 +1130,28 @@ final class Agent {
 
             guard let index = ringStep(count: windows.count, from: from, by: delta) else {
                 Log.debug("focus step ignored: no windows in the ring")
+                return nil
+            }
+            return index
+        }
+    }
+
+    /// Focus the nearest window in a direction, starting from the one that has focus.
+    private func focusDirection(_ direction: FocusDirection) {
+        moveFocus("focus \(direction.rawValue)") { ring, live, front in
+            let windows = ring.windows
+            let source = live ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
+            guard let source else {
+                Log.debug("focus \(direction.rawValue): focus is on nothing the ring can name, "
+                    + "so there is no telling where to step from")
+                return nil
+            }
+
+            // Ring order is the tie-break, so equally near windows resolve the way the ring runs.
+            let candidates = windows.enumerated().map { RingWindow(frame: $1.frame, key: $0) }
+            guard let index = directionalStep(from: windows[source].frame, in: candidates, direction)
+            else {
+                Log.debug("focus \(direction.rawValue): no window that way")
                 return nil
             }
             return index

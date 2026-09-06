@@ -46,6 +46,20 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
 - **Control+Command+1** to **9** moves keyboard focus to the window with that number, counted in
   the same order: with Zen on the left and a terminal on the right, 1 is Zen and 2 is the terminal. A
   number with no window on it does nothing.
+- **Directional focus** moves to the nearest window left, right, up, or down of the focused one.
+  Off by default, because each shortcut Heed registers is taken away from every other app:
+
+  ```sh
+  defaults write io.github.rbstp.heed focusLeftHotkey 'cmd+ctrl+alt+h'
+  defaults write io.github.rbstp.heed focusDownHotkey 'cmd+ctrl+alt+j'
+  defaults write io.github.rbstp.heed focusUpHotkey 'cmd+ctrl+alt+k'
+  defaults write io.github.rbstp.heed focusRightHotkey 'cmd+ctrl+alt+l'
+  make restart
+  ```
+
+  A window sharing a row or column with the focused one wins over a closer one that does not, and
+  the edge of the arrangement is a dead end rather than a wrap. Pair it with a tiling shortcut:
+  Raycast's halves and quarters put the windows where these then move between.
 
 Change or disable the shortcuts:
 
@@ -89,6 +103,7 @@ Heed follows the pointer but avoids the common focus fights:
 - Floating panels and other transient windows are not pointer focus targets.
 - The focus shortcuts cycle visible windows in spatial order, not stacking order, so stepping through
   them does not reorder the cycle.
+- Directional focus never wraps: running out of windows in a direction does nothing.
 
 macOS does not separate focus from raising across applications: focusing another app brings it
 forward. The `raise` setting only orders windows within an app.
@@ -105,6 +120,10 @@ Settings live in the `io.github.rbstp.heed` defaults domain. Restart Heed after 
 | `focusNextHotkey` | `cmd+ctrl+right` | Move focus to the next window. Empty to disable. |
 | `focusPreviousHotkey` | `cmd+ctrl+left` | Move focus to the previous window. Empty to disable. |
 | `focusWindowHotkey` | `cmd+ctrl+1` | Move focus to window 1; the same modifiers with 2 to 9 reach the others. Empty to disable. |
+| `focusLeftHotkey` | off | Move focus to the nearest window to the left. |
+| `focusRightHotkey` | off | Move focus to the nearest window to the right. |
+| `focusUpHotkey` | off | Move focus to the nearest window above. |
+| `focusDownHotkey` | off | Move focus to the nearest window below. |
 | `dwellMs` | `0` | Time the pointer must rest before focus changes. Try `200` if instant is too eager. |
 | `pollMs` | `40` | Pointer sampling interval while active. |
 | `idlePollMs` | `1000` | Heartbeat while idle. Mouse movement wakes the fast loop. |

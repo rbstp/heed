@@ -146,9 +146,8 @@ rather than its `number`, which is only that snapshot's ordering.
 Raycast already tiles and switches windows; Heed adds the pointer. Give Raycast the hotkey and let
 Heed claim nothing.
 
-There is a Raycast extension in [`raycast/`](raycast/): a searchable window list, plus a command
-for each of these, so the hotkey is Raycast's and Heed claims nothing. Until it is in the store,
-run it from a checkout:
+There is a Raycast extension in [`raycast/`](raycast/) with a command for each of these, so the
+hotkey is Raycast's and Heed claims nothing. Until it is in the store, run it from a checkout:
 
 ```sh
 cd raycast && npm install && npm run dev

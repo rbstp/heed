@@ -22,13 +22,6 @@
   ],
   "commands": [
     {
-      "name": "search-windows",
-      "title": "Search Windows",
-      "subtitle": "Heed",
-      "description": "List every visible window in Heed's spatial order and focus one.",
-      "mode": "view"
-    },
-    {
       "name": "focus-next",
       "title": "Focus Next Window",
       "subtitle": "Heed",
@@ -146,8 +139,7 @@
     }
   ],
   "dependencies": {
-    "@raycast/api": "^2.2.0",
-    "@raycast/utils": "^2.3.1"
+    "@raycast/api": "^2.2.0"
   },
   "devDependencies": {
     "@raycast/eslint-config": "^2.2.0",

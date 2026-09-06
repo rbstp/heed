@@ -2,7 +2,7 @@ import XCTest
 @testable import FFMCore
 
 final class HotkeySpecTests: XCTestCase {
-    /// The shipped default. If this test ever has to change, so does the README.
+    /// The shipped default. If this changes, so does the README.
     func testTheDefaultCombination() {
         let spec = HotkeySpec("cmd+ctrl+h")
         XCTAssertEqual(spec?.modifiers, [.command, .control])
@@ -14,7 +14,7 @@ final class HotkeySpecTests: XCTestCase {
     func testSpellingsThatMeanTheSameThing() {
         let canonical = HotkeySpec("cmd+ctrl+h")
         for text in ["command+control+h", "Cmd+Ctrl+H", "CTRL+CMD+H", "cmd-ctrl-h",
-                     "cmd ctrl h", "⌘⌃h", "⌃⌘H", "meta+control+h"] {
+                     "cmd ctrl h", "⌘⌃h", "⌃⌘H", "meta+control+h", " cmd+ctrl+h "] {
             XCTAssertEqual(HotkeySpec(text), canonical, "\(text) should parse the same way")
         }
     }
@@ -22,20 +22,17 @@ final class HotkeySpecTests: XCTestCase {
     func testEveryModifier() {
         let spec = HotkeySpec("cmd+ctrl+opt+shift+k")
         XCTAssertEqual(spec?.modifiers, [.command, .control, .option, .shift])
-        // The order macOS shows them in, not the order they were typed.
-        XCTAssertEqual(spec?.display, "⌃⌥⇧⌘K")
+        XCTAssertEqual(spec?.display, "⌃⌥⇧⌘K", "the order macOS shows them in")
+        XCTAssertEqual(spec?.written, "ctrl+alt+shift+cmd+k")
     }
 
-    /// Without a modifier the hotkey would swallow that key across the whole system, starting with
-    /// your ability to type it.
     func testRejectsAKeyWithNoModifier() {
         XCTAssertNil(HotkeySpec("h"))
         XCTAssertNil(HotkeySpec("f5"))
         XCTAssertNil(HotkeySpec(""))
     }
 
-    /// Shift is not a chord: `shift+a` is how a capital A is typed, so accepting it would take
-    /// uppercase away system-wide -- exactly what the modifier rule exists to prevent.
+    /// `shift+a` is how a capital A is typed.
     func testRejectsShiftAsTheOnlyModifier() {
         XCTAssertNil(HotkeySpec("shift+a"))
         XCTAssertNil(HotkeySpec("⇧h"))
@@ -52,8 +49,7 @@ final class HotkeySpecTests: XCTestCase {
         XCTAssertNil(HotkeySpec("cmd+h+j"))
     }
 
-    /// A typo must not quietly register some other key. This is the failure the parser exists to
-    /// turn into a log line.
+    /// A typo must not quietly register some other key.
     func testRejectsAKeyItDoesNotKnow() {
         XCTAssertNil(HotkeySpec("cmd+ctrl+hh"))
         XCTAssertNil(HotkeySpec("cmd+ctrl+f21"))
@@ -65,11 +61,15 @@ final class HotkeySpecTests: XCTestCase {
         XCTAssertEqual(HotkeySpec("cmd+esc"), HotkeySpec("cmd+escape"))
         XCTAssertEqual(HotkeySpec("ctrl+enter"), HotkeySpec("ctrl+return"))
         XCTAssertEqual(HotkeySpec("cmd+ctrl+f5")?.keyCode, 96)
-        XCTAssertEqual(HotkeySpec("cmd+ctrl+f5")?.display, "⌃⌘F5")
     }
 
-    /// Every code is the one the SDK defines. Spot-checked against values that are easy to
-    /// transpose: the letter row is not in alphabetical order, and the digits are not in order.
+    func testNamedKeysAreCapitalisedForDisplay() {
+        XCTAssertEqual(HotkeySpec("cmd+ctrl+f5")?.display, "⌃⌘F5")
+        XCTAssertEqual(HotkeySpec("cmd+ctrl+right")?.display, "⌃⌘Right")
+        XCTAssertEqual(HotkeySpec("alt+space")?.display, "⌥Space")
+    }
+
+    /// Spot-checked against values that are easy to transpose.
     func testKeyCodesMatchTheSDK() {
         let expected: [String: UInt16] = ["a": 0, "s": 1, "z": 6, "b": 11, "q": 12, "y": 16,
                                           "1": 18, "5": 23, "6": 22, "9": 25, "0": 29,
@@ -77,6 +77,14 @@ final class HotkeySpecTests: XCTestCase {
         for (key, code) in expected {
             XCTAssertEqual(HotkeySpec("cmd+\(key)")?.keyCode, code, "key code for \(key)")
         }
+    }
+
+    func testASettingThatNamesNoHotkeyIsOff() {
+        for text in ["", "  ", "none", "None", " NONE "] {
+            XCTAssertTrue(HotkeySpec.isOff(text), "\"\(text)\" names no hotkey")
+        }
+        XCTAssertFalse(HotkeySpec.isOff("cmd+ctrl+h"))
+        XCTAssertFalse(HotkeySpec.isOff("nonsense"), "a typo is not switched off; it is reported")
     }
 
     // MARK: - Changing the modifier
@@ -90,12 +98,12 @@ final class HotkeySpecTests: XCTestCase {
 
     func testTheKeyIsKeptWhenTheModifierChanges() {
         let changed = HotkeySpec("cmd+ctrl+right")!.withModifiers([.shift, .command])
-        XCTAssertEqual(changed?.display, "⇧⌘right".replacingOccurrences(of: "right", with: "Right"))
+        XCTAssertEqual(changed?.display, "⇧⌘Right")
         XCTAssertEqual(changed?.written, "shift+cmd+right")
+        XCTAssertEqual(changed?.keyCode, HotkeySpec("cmd+ctrl+right")?.keyCode)
     }
 
-    /// The same rule a typed combination has to pass: shift alone is not a chord, it is how a
-    /// capital letter is typed.
+    /// The same rule a typed combination has to pass.
     func testAModifierChangeThatWouldNotBeALegalHotkeyIsRefused() {
         XCTAssertNil(HotkeySpec("cmd+ctrl+h")!.withModifiers([.shift]))
         XCTAssertNil(HotkeySpec("cmd+ctrl+h")!.withModifiers([]))
@@ -114,15 +122,13 @@ final class HotkeySpecTests: XCTestCase {
         XCTAssertEqual(rewriteHotkey("none", modifiers: [.option, .command]), "none")
     }
 
-    /// Nor must a typo turn into a working shortcut nobody asked for.
     func testRewritingLeavesSomethingItCannotParseAlone() {
         XCTAssertEqual(rewriteHotkey("cmd+ctrl+nonsense", modifiers: [.option, .command]),
                        "cmd+ctrl+nonsense")
     }
 
-    /// The trap a "did this actually change anything?" check has to avoid. What is stored is
-    /// however somebody wrote it; what comes back from a rewrite is canonical. The same chord is
-    /// then two different strings, and comparing the text would call it a change.
+    /// The stored text is however it was typed; the rewrite is canonical. Comparing text would call
+    /// the same chord a change.
     func testTheSameCombinationCanBeWrittenTwoWays() {
         let rewritten = rewriteHotkey("cmd+ctrl+h", modifiers: [.control, .command])
         XCTAssertNotEqual(rewritten, "cmd+ctrl+h", "the canonical order is not the typed one")
@@ -144,14 +150,20 @@ final class HotkeySpecTests: XCTestCase {
         XCTAssertEqual(Set(sets.map { $0.map(\.rawValue).sorted().joined() }).count, sets.count)
     }
 
+    func testThePresetsAreNamedTheWayMacOSNamesThem() {
+        XCTAssertEqual(ModifierPreset.controlCommand.display, "⌃⌘")
+        XCTAssertEqual(ModifierPreset.controlOptionCommand.display, "⌃⌥⌘")
+        XCTAssertEqual(ModifierPreset.controlCommand.spoken, "Control-Command")
+        XCTAssertEqual(ModifierPreset.optionCommand.spoken, "Option-Command")
+    }
+
     func testTheModifierInForceIsRecognised() {
         XCTAssertEqual(ModifierPreset.matching([.control, .command]), .controlCommand)
         XCTAssertEqual(ModifierPreset.matching(HotkeySpec("cmd+ctrl+alt+left")!.modifiers),
                        .controlOptionCommand)
     }
 
-    /// Someone who typed their own combination into `defaults write` should see none of the offered
-    /// ones ticked, rather than the nearest.
+    /// Someone who typed their own combination should see none of the offered ones ticked.
     func testAModifierNobodyOfferedMatchesNothing() {
         XCTAssertNil(ModifierPreset.matching([.command]))
         XCTAssertNil(ModifierPreset.matching([.control, .option, .shift, .command]))
@@ -163,9 +175,8 @@ final class HotkeySpecTests: XCTestCase {
         XCTAssertNil(ModifierPreset.controlCommand.caution)
     }
 
-    /// Command-Shift with the arrow keys selects a line in every text field on the system, which is
-    /// too much to take away from behind a tooltip. `defaults write` still sets it for anyone who
-    /// wants it; the menu does not hand it out.
+    /// Command-Shift with the arrows selects a line in every text field; the menu does not hand it
+    /// out, but `defaults write` still sets it.
     func testCommandShiftIsNotOffered() {
         XCTAssertFalse(ModifierPreset.allCases.contains { $0.modifiers == [.shift, .command] })
         XCTAssertNil(ModifierPreset.matching(HotkeySpec("cmd+shift+left")!.modifiers))

@@ -4,17 +4,12 @@ import XCTest
 final class MenuBarStateTests: XCTestCase {
     func testBrightOnlyWhenItCanActuallyWork() {
         XCTAssertFalse(MenuBarState(enabled: true, trusted: true).dimmed)
-
-        // Dimmed for either reason. The icon reports whether the pointer moves anything, and a
-        // grant that never arrived means it does not, however the switch is set.
         XCTAssertTrue(MenuBarState(enabled: false, trusted: true).dimmed)
         XCTAssertTrue(MenuBarState(enabled: true, trusted: false).dimmed)
         XCTAssertTrue(MenuBarState(enabled: false, trusted: false).dimmed)
     }
 
-    /// The regression this whole type exists for. Nothing re-checks trust while the agent is not
-    /// polling, so naming the missing grant while off would leave the tooltip claiming it long after
-    /// the user had granted it -- a message that cannot be made true again without a click.
+    /// Nothing re-checks trust while off, so a tooltip naming the grant would go stale.
     func testNeverNamesTheGrantWhileOff() {
         for trusted in [true, false] {
             let state = MenuBarState(enabled: false, trusted: trusted)
@@ -36,15 +31,12 @@ final class MenuBarStateTests: XCTestCase {
                        "Heed is on. Click to turn it off.")
     }
 
-    /// The label is all a VoiceOver user gets, so it carries the switch position rather than
-    /// whether the icon happens to be dimmed.
+    /// The label is all a VoiceOver user gets, so it carries the switch position.
     func testLabelReportsTheSwitchNotTheDimming() {
         XCTAssertEqual(MenuBarState(enabled: true, trusted: false).label, "Heed, on")
         XCTAssertEqual(MenuBarState(enabled: false, trusted: true).label, "Heed, off")
     }
 
-    /// The menu item offers the opposite of the current state; naming the current one is the
-    /// classic way to build a switch nobody can read.
     func testToggleTitleOffersTheOppositeState() {
         XCTAssertEqual(MenuBarState(enabled: true, trusted: true).toggleTitle, "Turn Heed Off")
         XCTAssertEqual(MenuBarState(enabled: false, trusted: true).toggleTitle, "Turn Heed On")

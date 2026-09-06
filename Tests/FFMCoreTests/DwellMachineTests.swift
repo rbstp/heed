@@ -1,10 +1,9 @@
 import XCTest
 @testable import FFMCore
 
-/// Drives DwellMachine with a scripted clock and recording closures.
 private final class Harness {
     var machine: DwellMachine<String>
-    var now: Double = 100  // arbitrary non-zero start, so a bug reading 0 as "long ago" shows up
+    var now: Double = 100  // non-zero, so a bug reading 0 as "long ago" shows up
     var underCursor: String?
     var focused: String?
     var hitTestCalls = 0
@@ -38,9 +37,6 @@ final class DwellMachineTests: XCTestCase {
 
     // MARK: - Expiry
 
-    /// The core behaviour, and the one an earlier draft of this design got wrong by treating
-    /// "cursor did not move" as a condition that cancels dwell: settling the pointer and waiting
-    /// must be what actually moves focus.
     func testDwellExpiresWhileCursorIsStationary() {
         let h = Harness(dwell: 0.2)
         h.underCursor = "A"
@@ -83,16 +79,13 @@ final class DwellMachineTests: XCTestCase {
 
     // MARK: - Movement within a target
 
-    /// Pointer drift inside one window must not keep resetting the timer, or focus would never
-    /// settle for anyone who does not hold the mouse perfectly still.
+    /// Drift inside one window must not keep resetting the timer.
     func testMovementWithinSameTargetDoesNotRestartDwell() {
         let h = Harness(dwell: 0.2)
         h.underCursor = "A"
         h.tick(moved: true)
         let start = h.now
 
-        // Keep jiggling inside A well past the dwell period. Focus must still land, and land at
-        // roughly dwell time -- a machine that reset the clock on every movement would never fire.
         var firedAfter: Double?
         for _ in 0..<10 {
             h.advance(0.06)
@@ -124,8 +117,6 @@ final class DwellMachineTests: XCTestCase {
         XCTAssertEqual(h.tick(), "B")
     }
 
-    /// Sweeping the pointer across intermediate windows to reach a destination must not focus each
-    /// one on the way past.
     func testSweepingAcrossWindowsFocusesOnlyWhereItSettles() {
         let h = Harness(dwell: 0.2)
         for target in ["A", "B", "C", "D"] {
@@ -142,7 +133,7 @@ final class DwellMachineTests: XCTestCase {
         h.underCursor = "A"
         h.tick(moved: true)
 
-        h.underCursor = nil  // e.g. moved onto the desktop
+        h.underCursor = nil
         h.tick(moved: true)
         h.advance(0.5)
         XCTAssertNil(h.tick(), "a target that vanished must not be focused")
@@ -156,7 +147,7 @@ final class DwellMachineTests: XCTestCase {
         h.tick(moved: true)
         h.advance(0.15)
 
-        h.tick(.suppressing)  // e.g. a mouse button went down
+        h.tick(.suppressing)
 
         h.advance(0.5)
         XCTAssertNil(h.tick(), "dwell cancelled by a suppressing condition must not later fire")
@@ -169,9 +160,7 @@ final class DwellMachineTests: XCTestCase {
         XCTAssertEqual(h.hitTestCalls, 0)
     }
 
-    /// Suppression must not disarm the machine permanently. Typing while the pointer already rests
-    /// over a window, then stopping, has to leave that window acquirable -- the pointer will not move
-    /// again to trigger a fresh hit test.
+    /// Typing over a window and then stopping must leave it acquirable without further movement.
     func testTargetIsReacquiredAfterSuppressionEnds() {
         let h = Harness(dwell: 0.2)
         h.underCursor = "A"
@@ -187,8 +176,6 @@ final class DwellMachineTests: XCTestCase {
                        "a window under a still pointer must be focusable once suppression lifts")
     }
 
-    /// After a Space change or display reconfiguration, what sits under an unmoved pointer is
-    /// different, so the next tick has to re-test rather than trust the previous result.
     func testInvalidatingForcesHitTestWithoutMovement() {
         let h = Harness(dwell: 0.2)
         h.underCursor = "A"
@@ -212,7 +199,6 @@ final class DwellMachineTests: XCTestCase {
         h.advance(0.25)
         XCTAssertEqual(h.tick(), "A")
 
-        // Caller failed to apply focus and re-arms; a stationary pointer must still get a retry.
         h.machine.invalidate()
         h.tick(moved: false)
         h.advance(0.25)
@@ -243,10 +229,7 @@ final class DwellMachineTests: XCTestCase {
         XCTAssertEqual(h.focusCheckCalls, 1)
     }
 
-    /// Regression test for the stale-cache bug that a previous design had: focus is moved by the
-    /// pointer, then moved elsewhere by other means (keyboard, Cmd-Tab, an app activating itself).
-    /// Nudging the pointer inside the original window must bring focus back. A design that
-    /// remembered "I already focused A" would refuse here, leaving a dead window under the cursor.
+    /// A design that remembered "I already focused A" would refuse here and leave A dead.
     func testRefocusesAfterFocusMovedAwayByOtherMeans() {
         let h = Harness(dwell: 0.2)
         h.underCursor = "A"
@@ -255,10 +238,9 @@ final class DwellMachineTests: XCTestCase {
         XCTAssertEqual(h.tick(), "A")
         h.focused = "A"
 
-        // User switches to B with the keyboard; pointer never left A.
-        h.focused = "B"
+        h.focused = "B"   // keyboard switch; the pointer never left A
 
-        h.tick(moved: true)  // slight nudge inside A
+        h.tick(moved: true)
         h.advance(0.25)
         XCTAssertEqual(h.tick(), "A", "pointer still over A, so A must regain focus")
     }

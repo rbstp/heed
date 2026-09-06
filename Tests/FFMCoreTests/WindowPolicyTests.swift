@@ -5,9 +5,7 @@ import XCTest
 
 final class WindowSourceTests: XCTestCase {
 
-    /// Regression test. Some apps report a content element as their top level; trusting it because it
-    /// was merely non-nil made every window of those apps unfocusable, which showed up in the log as
-    /// an endless run of "skipped: role AXList".
+    /// Trusting a non-window top level made every window of some apps unfocusable.
     func testAContentElementTopLevelIsNotTrusted() {
         let resolution = resolveWindowSource(topLevelRole: "AXList", elementRole: "AXGroup")
         XCTAssertEqual(resolution, .tryInOrder([.windowAttribute]),
@@ -21,8 +19,7 @@ final class WindowSourceTests: XCTestCase {
         )
     }
 
-    /// AXTopLevelUIElement is asked first precisely because it is the only one that reveals a sheet:
-    /// AXWindow reports the sheet's owner instead, hiding it.
+    /// AXWindow reports a sheet's owner instead, hiding it.
     func testASheetIsRejectedRatherThanResolvedToItsOwner() {
         XCTAssertEqual(resolveWindowSource(topLevelRole: kAXSheetRole, elementRole: "AXButton"), .sheet)
         XCTAssertEqual(resolveWindowSource(topLevelRole: kAXSheetRole, elementRole: kAXWindowRole), .sheet)
@@ -42,9 +39,7 @@ final class WindowSourceTests: XCTestCase {
 
 final class FocusHolderTests: XCTestCase {
 
-    /// The motivating case: an About panel (CodeBurn's reports subrole AXDialog and an empty
-    /// title) opened from the menu, immediately robbed of key status by the sibling window still
-    /// sitting under the pointer.
+    /// An About panel opened from the menu, robbed of key status by the sibling under the pointer.
     func testDialogsHoldFocusAgainstTheirSiblings() {
         XCTAssertTrue(transientWindowHoldsFocus(subrole: kAXDialogSubrole))
         XCTAssertTrue(transientWindowHoldsFocus(subrole: kAXSystemDialogSubrole))
@@ -55,8 +50,7 @@ final class FocusHolderTests: XCTestCase {
         XCTAssertTrue(transientWindowHoldsFocus(subrole: kAXSystemFloatingWindowSubrole))
     }
 
-    /// An ordinary sibling window must not hold: switching between two documents of one app with
-    /// the pointer is the tool's core use.
+    /// Switching between two documents of one app with the pointer is the core use.
     func testAStandardWindowDoesNotHoldFocus() {
         XCTAssertFalse(transientWindowHoldsFocus(subrole: kAXStandardWindowSubrole))
     }
@@ -71,8 +65,6 @@ final class FocusHolderTests: XCTestCase {
 final class PromptTests: XCTestCase {
     private let finderPrompt = [PromptRule(bundleID: "com.apple.finder", identifier: "Progress")]
 
-    /// The motivating case: Finder asking whether to replace a dropped file. Subrole
-    /// AXStandardWindow, localized title, but a stable identifier and a row of answer buttons.
     func testFindersReplaceQuestionAwaitsAnswer() {
         XCTAssertTrue(windowAwaitsAnswer(
             identifier: "Progress", bundleID: "com.apple.finder",
@@ -80,9 +72,7 @@ final class PromptTests: XCTestCase {
         ))
     }
 
-    /// The same window in its idle form -- a copy in progress -- has no window-level buttons, and
-    /// a lone Stop button is not a question. Holding there would freeze pointer focus for the
-    /// length of a big copy.
+    /// The same window as a plain copy bar has at most a lone Stop button.
     func testPlainProgressDoesNotHoldFocus() {
         for buttons in [0, 1] {
             XCTAssertFalse(windowAwaitsAnswer(
@@ -127,6 +117,8 @@ final class PromptTests: XCTestCase {
 
 final class WindowPolicyTests: XCTestCase {
     private let outlook = "com.microsoft.Outlook"
+    private let reminderRule = TitleRule(bundleID: "com.microsoft.Outlook",
+                                         pattern: "^[0-9]+ (Reminders?|rappels?)$")!
 
     private func candidate(
         role: String? = kAXWindowRole,
@@ -162,8 +154,6 @@ final class WindowPolicyTests: XCTestCase {
 
     // MARK: - Subroles
 
-    /// The allowlist is what keeps transient panels from dragging their app forward. Every ordinary
-    /// window across the apps tested reports AXStandardWindow; chrome does not.
     func testOnlyStandardWindowsPassTheAllowlist() {
         let policy = WindowPolicy(requireStandardWindow: true)
         XCTAssertEqual(evaluate(candidate(), policy: policy), .accept)
@@ -174,8 +164,7 @@ final class WindowPolicyTests: XCTestCase {
         }
     }
 
-    /// With the allowlist off, an unrecognised subrole is allowed through but known chrome is not --
-    /// the escape hatch for an app whose windows do not report a standard subrole.
+    /// The escape hatch for an app whose windows do not report a standard subrole.
     func testWithTheAllowlistOffOnlyKnownChromeIsRejected() {
         let policy = WindowPolicy(requireStandardWindow: false)
         XCTAssertEqual(evaluate(candidate(subrole: "AXSomethingCustom"), policy: policy), .accept)
@@ -213,13 +202,9 @@ final class WindowPolicyTests: XCTestCase {
 
     // MARK: - Title rules
 
-    /// The reminder panel passes every structural check -- standard subrole, ordinary size, minimize
-    /// and zoom buttons -- so the title rule is the only thing standing between it and dragging all
-    /// of Outlook in front of your work.
+    /// The reminder panel passes every structural check; the title rule is all that stops it.
     func testOutlooksReminderPanelIsRejectedByTitle() {
-        let policy = WindowPolicy(
-            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ (Reminders?|rappels?)$")!]
-        )
+        let policy = WindowPolicy(titleRules: [reminderRule])
         XCTAssertNotEqual(
             evaluate(candidate(title: "1 Reminder", bundleID: outlook), policy: policy), .accept
         )
@@ -229,9 +214,7 @@ final class WindowPolicyTests: XCTestCase {
     }
 
     func testAnEmailAboutRemindersStaysFocusable() {
-        let policy = WindowPolicy(
-            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ (Reminders?|rappels?)$")!]
-        )
+        let policy = WindowPolicy(titleRules: [reminderRule])
         for title in ["Reminder: standup", "RE: Reminder to file expenses", "Calendar"] {
             XCTAssertEqual(
                 evaluate(candidate(title: title, bundleID: outlook), policy: policy), .accept,
@@ -241,19 +224,27 @@ final class WindowPolicyTests: XCTestCase {
     }
 
     func testATitleRuleDoesNotLeakToOtherApps() {
-        let policy = WindowPolicy(
-            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ (Reminders?|rappels?)$")!]
-        )
+        let policy = WindowPolicy(titleRules: [reminderRule])
         XCTAssertEqual(
             evaluate(candidate(title: "1 Reminder", bundleID: "com.apple.Reminders"), policy: policy),
             .accept
         )
     }
 
+    /// The user's `excludedWindowTitles` entries carry no bundle id and apply everywhere.
+    func testAnUnscopedTitleRuleAppliesToEveryApp() {
+        let policy = WindowPolicy(titleRules: [TitleRule(bundleID: nil, pattern: "^Picture in Picture$")!])
+        for bundle in ["com.apple.Safari", "app.zen-browser.zen", nil] {
+            XCTAssertNotEqual(
+                evaluate(candidate(title: "Picture in Picture", bundleID: bundle), policy: policy),
+                .accept, "\(bundle ?? "an app with no bundle id") must be excluded too"
+            )
+        }
+        XCTAssertEqual(evaluate(candidate(title: "Document", bundleID: nil), policy: policy), .accept)
+    }
+
     func testAnUnreadableTitleCannotBypassARuleItWouldNotHaveMatched() {
-        let policy = WindowPolicy(
-            titleRules: [TitleRule(bundleID: outlook, pattern: "^[0-9]+ (Reminders?|rappels?)$")!]
-        )
+        let policy = WindowPolicy(titleRules: [reminderRule])
         XCTAssertEqual(evaluate(candidate(title: nil, bundleID: outlook), policy: policy), .accept)
     }
 }

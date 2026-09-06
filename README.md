@@ -33,8 +33,9 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
 
 ## Use
 
-- **Click** the menu bar cube to turn focus following on or off. A dim icon means off or no
-  Accessibility permission; hover to see which.
+- **Click** the pointer in the menu bar to turn focus following on or off. The pointer shows rays
+  while Heed is on and none while it is off. A dim icon means Heed cannot work, because it is off or
+  has no Accessibility permission; hover to see which.
 - **Right-click** (or control-click) it to change the shortcut modifier, open the log, see the
   version, or quit. Quitting unloads the login agent until the next login.
 - **Control+Command+H** toggles Heed from anywhere.
@@ -42,6 +43,9 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
   screen by screen from left to right, then left to right within each screen. A window focused this
   way keeps focus until the pointer settles on another one. Windows completely covered by others are
   skipped. These work whether or not Heed is switched on.
+- **Control+Command+1** to **9** moves keyboard focus to the window with that number, counted in
+  the same order: with Zen on the left and a terminal on the right, 1 is Zen and 2 is the terminal. A
+  number with no window on it does nothing.
 
 Change or disable the shortcuts:
 
@@ -55,7 +59,7 @@ make restart
 A hotkey needs at least one modifier other than Shift. If another app already registered it, Heed
 logs the refusal and registers nothing.
 
-**Shortcut Modifier** in the right-click menu changes the modifier of all three shortcuts at once
+**Shortcut Modifier** in the right-click menu changes the modifier of every shortcut at once
 without a restart. The icon flashes green when it takes and red when the combination is taken, in
 which case nothing changes and the log says which app holds it.
 
@@ -100,6 +104,7 @@ Settings live in the `io.github.rbstp.heed` defaults domain. Restart Heed after 
 | `hotkey` | `cmd+ctrl+h` | Global toggle. Empty string disables it. |
 | `focusNextHotkey` | `cmd+ctrl+right` | Move focus to the next window. Empty to disable. |
 | `focusPreviousHotkey` | `cmd+ctrl+left` | Move focus to the previous window. Empty to disable. |
+| `focusWindowHotkey` | `cmd+ctrl+1` | Move focus to window 1; the same modifiers with 2 to 9 reach the others. Empty to disable. |
 | `dwellMs` | `0` | Time the pointer must rest before focus changes. Try `200` if instant is too eager. |
 | `pollMs` | `40` | Pointer sampling interval while active. |
 | `idlePollMs` | `1000` | Heartbeat while idle. Mouse movement wakes the fast loop. |

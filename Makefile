@@ -52,7 +52,7 @@ build:
 test:
 	swift test
 
-## Render the iconset from code; below 32px the renderer switches to a head-on cube.
+## Render the iconset from code: the menu bar symbol, white on a dark tile.
 icon: $(ICNS)
 
 # The Makefile defines the size matrix, so it is a dependency too.

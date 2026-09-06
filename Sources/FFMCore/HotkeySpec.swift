@@ -82,6 +82,13 @@ public struct HotkeySpec: Equatable, Sendable {
         return HotkeySpec(modifiers: modifiers, key: key, keyCode: keyCode)
     }
 
+    /// The same modifiers with another key, or nil when the key is not one this knows.
+    public func withKey(_ key: String) -> HotkeySpec? {
+        let name = HotkeySpec.keyAliases[key.lowercased()] ?? key.lowercased()
+        guard let code = HotkeySpec.keyCodes[name] else { return nil }
+        return HotkeySpec(modifiers: modifiers, key: name, keyCode: code)
+    }
+
     /// The form `defaults write` takes: `ctrl+alt+shift+cmd+h`.
     public var written: String {
         (modifiers.ordered.map(\.written) + [key]).joined(separator: "+")

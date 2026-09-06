@@ -103,6 +103,20 @@ final class HotkeySpecTests: XCTestCase {
         XCTAssertEqual(changed?.keyCode, HotkeySpec("cmd+ctrl+right")?.keyCode)
     }
 
+    func testTheModifiersAreKeptWhenTheKeyChanges() {
+        let spec = HotkeySpec("cmd+ctrl+1")!
+        XCTAssertEqual(spec.withKey("2"), HotkeySpec("cmd+ctrl+2"))
+        XCTAssertEqual(spec.withKey("Esc"), HotkeySpec("cmd+ctrl+escape"))
+        XCTAssertNil(spec.withKey("wat"))
+    }
+
+    /// One setting stands for nine registrations, so every digit has to parse.
+    func testDigitsOneToNineAreAllKnown() {
+        for digit in 1...9 {
+            XCTAssertNotNil(HotkeySpec("cmd+ctrl+\(digit)"), "digit \(digit)")
+        }
+    }
+
     /// The same rule a typed combination has to pass.
     func testAModifierChangeThatWouldNotBeALegalHotkeyIsRefused() {
         XCTAssertNil(HotkeySpec("cmd+ctrl+h")!.withModifiers([.shift]))

@@ -232,13 +232,14 @@ final class Agent {
     }
 
     private enum Shortcut: CaseIterable {
-        case toggle, focusNext, focusPrevious
+        case toggle, focusNext, focusPrevious, focusWindow
 
         var which: String {
             switch self {
             case .toggle: "toggles Heed"
             case .focusNext: "moves focus to the next window"
             case .focusPrevious: "moves focus to the previous window"
+            case .focusWindow: "moves focus to a window by number"
             }
         }
 
@@ -247,6 +248,7 @@ final class Agent {
             case .toggle: "hotkey"
             case .focusNext: "focusNextHotkey"
             case .focusPrevious: "focusPreviousHotkey"
+            case .focusWindow: "focusWindowHotkey"
             }
         }
 
@@ -255,15 +257,26 @@ final class Agent {
             case .toggle: \.hotkey
             case .focusNext: \.focusNextHotkey
             case .focusPrevious: \.focusPreviousHotkey
+            case .focusWindow: \.focusWindowHotkey
             }
         }
     }
 
-    private func action(for shortcut: Shortcut) -> () -> Void {
+    /// The registrations one setting asks for: one for most shortcuts, nine for the numbered
+    /// windows, whose setting names the combination for window 1. Nil when it names another key.
+    private func combinations(for shortcut: Shortcut, _ spec: HotkeySpec) -> [(HotkeySpec, () -> Void)]? {
         switch shortcut {
-        case .toggle: { [weak self] in self?.toggleEnabled() }
-        case .focusNext: { [weak self] in self?.stepFocus(by: 1) }
-        case .focusPrevious: { [weak self] in self?.stepFocus(by: -1) }
+        case .toggle:
+            return [(spec, { [weak self] in self?.toggleEnabled() })]
+        case .focusNext:
+            return [(spec, { [weak self] in self?.stepFocus(by: 1) })]
+        case .focusPrevious:
+            return [(spec, { [weak self] in self?.stepFocus(by: -1) })]
+        case .focusWindow:
+            guard spec.key == "1" else { return nil }
+            return (1...9).compactMap { number in
+                spec.withKey("\(number)").map { ($0, { [weak self] in self?.focusWindow(number) }) }
+            }
         }
     }
 
@@ -307,12 +320,22 @@ final class Agent {
                 specs.append(nil)
                 continue
             }
-            guard let registered = Hotkey(spec: spec, action: action(for: shortcut)) else {
+            guard let combinations = combinations(for: shortcut, spec) else {
+                Log.note("hotkey \"\(wanted)\" must end in 1, the other digits follow; nothing \(shortcut.which)")
                 specs.append(nil)
-                refused = true
                 continue
             }
-            held.append(registered)
+            var registered: [Hotkey] = []
+            for (combination, action) in combinations {
+                guard let hotkey = Hotkey(spec: combination, action: action) else { break }
+                registered.append(hotkey)
+            }
+            guard registered.count == combinations.count else {
+                specs.append(nil)
+                refused = true   // Hotkey logs why; dropping the partial set unregisters it
+                continue
+            }
+            held += registered
             specs.append(spec)
         }
         return (held, specs, refused)
@@ -321,7 +344,10 @@ final class Agent {
     private func announce(specs: [HotkeySpec?]) {
         for (shortcut, spec) in zip(Shortcut.allCases, specs) {
             guard let spec else { continue }
-            Log.note("hotkey \(spec.display) \(shortcut.which)")
+            let combination = shortcut == .focusWindow
+                ? "\(spec.display) to \(spec.withKey("9")?.display ?? "?")"
+                : spec.display
+            Log.note("hotkey \(combination) \(shortcut.which)")
         }
     }
 
@@ -973,12 +999,12 @@ final class Agent {
 
     // MARK: - Focus ring
 
-    /// Move keyboard focus one step around the ring of visible windows. Runs whether or not Heed is
-    /// switched on: `enabled` is about the mouse.
-    private func stepFocus(by delta: Int) {
+    /// Move keyboard focus around the ring of visible windows. Runs whether or not Heed is
+    /// switched on: `enabled` is about the mouse. `choose` picks the ring index to land on.
+    private func moveFocus(_ what: String, choose: @escaping (Ring, _ live: Int?, _ front: pid_t?) -> Int?) {
         queue.async { [self] in
             guard accessibilityTrusted(prompt: false) else {
-                Log.note("cannot step focus: no Accessibility permission yet")
+                Log.note("\(what): no Accessibility permission yet")
                 return
             }
 
@@ -986,25 +1012,7 @@ final class Agent {
             let windows = ring.windows
             let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
             let live = liveFocusIndex(in: windows, frontmost: front)
-
-            // The last step is honoured only while it can still describe the same gesture.
-            let recent = now - lastStepAt < 1 ? lastStep : nil
-            // Focus on something the ring cannot name steps on from where that app sits.
-            let from = ringStart(in: windows, live: live, lastStep: recent)
-                ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
-
-            // Starting from the first window is a fair guess for an app with nothing in the ring,
-            // not for one that failed to answer.
-            if from == nil, let front, ring.unanswered.contains(front) {
-                let name = NSRunningApplication(processIdentifier: front)?.describedAs ?? "pid \(front)"
-                Log.note("focus step: \(name) did not answer, so there is no telling where to step from")
-                return
-            }
-
-            guard let index = ringStep(count: windows.count, from: from, by: delta) else {
-                Log.debug("focus step ignored: no windows in the ring")
-                return
-            }
+            guard let index = choose(ring, live, front) else { return }
 
             // Building the ring is many cross-process calls; a window can go away during them.
             let target = windows[index]
@@ -1012,13 +1020,12 @@ final class Agent {
                   axString(window, kAXRoleAttribute) == kAXWindowRole,
                   axBool(window, kAXMinimizedAttribute) != true
             else {
-                Log.debug("focus step: \(target.describedAs) went away while the ring was "
-                    + "being built")
+                Log.debug("\(what): \(target.describedAs) went away while the ring was being built")
                 return
             }
 
-            Log.debug("focus step \(delta > 0 ? "forward" : "back") to \(target.describedAs) "
-                + "-- \(target.title ?? "untitled") (\(index + 1) of \(windows.count))")
+            Log.debug("\(what) to \(target.describedAs) -- \(target.title ?? "untitled") "
+                + "(\(index + 1) of \(windows.count))")
 
             // Where the pointer is now, not as of the last tick: movement before the keystroke must
             // not release the hold this declares. Written back so `noteHandover` samples the same.
@@ -1034,17 +1041,51 @@ final class Agent {
             // A step between two windows of the frontmost app changes nothing `noteHandover` can
             // see, so the hold is declared here.
             if config.handoverGuard {
-                handover.noteKeyboardFocus(
-                    anchor: anchor(for: lastPointerWindow),
-                    owner: target.pid
-                )
+                handover.noteKeyboardFocus(anchor: anchor(for: lastPointerWindow), owner: target.pid)
             }
             machine.invalidate()
             wakeLoop()
         }
     }
 
+    private func stepFocus(by delta: Int) {
+        moveFocus(delta > 0 ? "focus step forward" : "focus step back") { [self] ring, live, front in
+            let windows = ring.windows
+            // The last step is honoured only while it can still describe the same gesture.
+            let recent = now - lastStepAt < 1 ? lastStep : nil
+            // Focus on something the ring cannot name steps on from where that app sits.
+            let from = ringStart(in: windows, live: live, lastStep: recent)
+                ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
+
+            // Starting from the first window is a fair guess for an app with nothing in the ring,
+            // not for one that failed to answer.
+            if from == nil, let front, ring.unanswered.contains(front) {
+                let name = NSRunningApplication(processIdentifier: front)?.describedAs ?? "pid \(front)"
+                Log.note("focus step: \(name) did not answer, so there is no telling where to step from")
+                return nil
+            }
+
+            guard let index = ringStep(count: windows.count, from: from, by: delta) else {
+                Log.debug("focus step ignored: no windows in the ring")
+                return nil
+            }
+            return index
+        }
+    }
+
+    /// Focus the window with this number in ring order, the way Hyprland switches workspaces.
+    private func focusWindow(_ number: Int) {
+        moveFocus("focus window \(number)") { ring, _, _ in
+            guard ring.windows.indices.contains(number - 1) else {
+                Log.note("focus window \(number): only \(ring.windows.count) windows on screen")
+                return nil
+            }
+            return number - 1
+        }
+    }
+
     private struct Ring {
+
         let windows: [Target]
         /// Apps asked for their windows that did not answer, as opposed to having none.
         let unanswered: Set<pid_t>

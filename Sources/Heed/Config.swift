@@ -11,6 +11,8 @@ struct Config {
     // a Carbon hotkey takes the combination away system-wide.
     var focusNextHotkey = "cmd+ctrl+right"
     var focusPreviousHotkey = "cmd+ctrl+left"
+    /// Window 1; the same modifiers with 2 to 9 reach the others. See `Agent.combinations`.
+    var focusWindowHotkey = "cmd+ctrl+1"
     var dwellMs = 0
     var pollMs = 40
     var idlePollMs = 1_000
@@ -110,6 +112,7 @@ struct Config {
         config.focusNextHotkey = defaults.string(forKey: "focusNextHotkey") ?? config.focusNextHotkey
         config.focusPreviousHotkey =
             defaults.string(forKey: "focusPreviousHotkey") ?? config.focusPreviousHotkey
+        config.focusWindowHotkey = defaults.string(forKey: "focusWindowHotkey") ?? config.focusWindowHotkey
         config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
         config.pollMs = int("pollMs", config.pollMs, 10...1_000)
         config.idlePollMs = int("idlePollMs", config.idlePollMs, 100...10_000)

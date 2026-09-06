@@ -42,11 +42,11 @@ defaults write io.github.rbstp.heed warpPointer -bool true
 
 ## How it works
 
-Each command opens a `heed://` URL, which a running Heed handles directly. Nothing is installed
-alongside the extension and no binary is called.
+Every command that moves focus opens a `heed://` URL, which a running Heed handles directly. The
+channel is one way: Heed answers nothing back, so a command reports what it asked for rather than
+what came of it, and a command sent to a Heed that is not running launches it first.
 
-The channel is one way: Heed answers nothing back, so a command reports what it asked for rather
-than what came of it. A command sent to a Heed that is not running launches it first.
+Search Windows is the one that reads rather than writes. It runs `Heed --windows`, which builds the
+list from the window server and Accessibility on the spot, so the list is a real answer.
 
-Search Windows is the exception: it runs `Heed --windows`, which reads the windows for itself and
-prints them, so the list is a real answer rather than a fire and forget.
+Nothing is installed alongside the extension.

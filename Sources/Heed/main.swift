@@ -24,6 +24,12 @@ if let flag = CommandLine.arguments.firstIndex(of: "--probe") {
 // cannot reach its state, so the command travels as a distributed notification.
 switch commandLineRequest(CommandLine.arguments) {
 case .command(let command):
+    let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    guard running else {
+        FileHandle.standardError.write(Data("Heed is not running; nothing to tell\n".utf8))
+        exit(1)
+    }
     DistributedNotificationCenter.default().postNotificationName(
         Notification.Name(commandNotification), object: command.written,
         userInfo: nil, deliverImmediately: true

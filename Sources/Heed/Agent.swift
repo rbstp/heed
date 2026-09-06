@@ -60,6 +60,15 @@ final class Agent {
     private var hitTestCooldownUntil: Double = 0
     private var accessibilityLost = false
     private var lastResolvedName: String?
+    /// The last app other than Heed to come forward. A `heed://` URL activates Heed, so this is the
+    /// app a command arriving that way means.
+    private var lastForeignFront: pid_t?
+    /// The app the pointer was last warped into, or last declined for. Focus noticed again for the
+    /// same app is the same arrival, not a new one to chase.
+    private var lastWarpFront: pid_t?
+    /// Whether a click brought the front app forward. Sampled as the activation arrives: the loop
+    /// can notice the handover long after, by when "how long since the last click" says nothing.
+    private var frontArrivedByClick = false
 
     private var now: Double { ProcessInfo.processInfo.systemUptime }
 
@@ -82,6 +91,7 @@ final class Agent {
             AXUIElementSetMessagingTimeout(systemWide, 0.1)
 
             isRunning = true
+            lastForeignFront = frontmostForFocus()
             scheduleTimer()
             syncMenuBar()
             Log.note("running: enabled=\(config.enabled) dwell=\(config.dwellMs)ms "
@@ -1110,13 +1120,14 @@ final class Agent {
     private func warpAfterHandover() -> CGPoint? {
         guard config.warpPointer,
               let front = NSWorkspace.shared.frontmostApplication,
-              front.processIdentifier != ownPid
+              front.processIdentifier != ownPid,
+              lastWarpFront != front.processIdentifier
         else { return nil }
+        lastWarpFront = front.processIdentifier
 
         // Never out of a drag, and never off a click: this is for focus the keyboard moved.
-        guard NSEvent.pressedMouseButtons == 0,
-              secondsSinceAny(of: Agent.deliberateMouseEvents)
-                >= max(config.clickGrace, Agent.warpClickGrace)
+        guard !frontArrivedByClick, NSEvent.pressedMouseButtons == 0,
+              secondsSinceAny(of: Agent.deliberateMouseEvents) >= Agent.warpClickGrace
         else { return nil }
 
         guard let window = axElement(appElement(for: front.processIdentifier), kAXFocusedWindowAttribute),
@@ -1153,7 +1164,7 @@ final class Agent {
 
             guard let ring = focusRing() else { return }
             let windows = ring.windows
-            let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let front = frontmostForFocus()
             let live = liveFocusIndex(in: windows, frontmost: front)
             guard let index = choose(ring, live, front) else { return }
 
@@ -1187,6 +1198,7 @@ final class Agent {
             lastStepAt = now
 
             // The pointer moves before the hold is declared, so the hold anchors where it lands.
+            lastWarpFront = target.pid
             let warped = warpPointer(into: target.frame, why: "\(what) to \(target.describedAs)")
 
             // A step between two windows of the frontmost app changes nothing `noteHandover` can
@@ -1230,9 +1242,13 @@ final class Agent {
 
     /// Focus the nearest window in a direction, starting from the one that has focus.
     private func focusDirection(_ direction: FocusDirection) {
-        moveFocus("focus \(direction.rawValue)") { ring, live, front in
+        moveFocus("focus \(direction.rawValue)") { [self] ring, live, front in
             let windows = ring.windows
-            let source = live ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
+            // The same start as a ring step, so a held key advances and focus on something the ring
+            // cannot name steps from where that app sits.
+            let recent = now - lastStepAt < 1 ? lastStep : nil
+            let source = ringStart(in: windows, live: live, lastStep: recent)
+                ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
             guard let source else {
                 Log.debug("focus \(direction.rawValue): focus is on nothing the ring can name, "
                     + "so there is no telling where to step from")
@@ -1347,6 +1363,16 @@ final class Agent {
         return nil
     }
 
+    /// Whose focus a shortcut should step from. Heed itself is never the answer: a `heed://` URL
+    /// brings it forward, and the app it took the front from is the one the command is about.
+    private func frontmostForFocus() -> pid_t? {
+        guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              front != ownPid
+        else { return lastForeignFront }
+        lastForeignFront = front
+        return front
+    }
+
     /// Which ring entry holds focus, or nil when focus is on something the ring does not contain.
     private func liveFocusIndex(in ring: [Target], frontmost front: pid_t?) -> Int? {
         guard let front, front != ownPid,
@@ -1435,6 +1461,23 @@ final class Agent {
         }
 
         center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.processIdentifier != ownPid
+            else { return }
+            let pid = app.processIdentifier
+            let byClick = secondsSinceAny(of: Agent.deliberateMouseEvents) < Agent.warpClickGrace
+            queue.async {
+                self.lastForeignFront = pid
+                self.frontArrivedByClick = byClick
+                // Another app coming forward makes the next arrival of this one a new one.
+                if self.lastWarpFront != pid { self.lastWarpFront = nil }
+            }
+        }
+
+        center.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let self,
@@ -1446,6 +1489,8 @@ final class Agent {
                 self.blockedUntil[pid] = nil
                 self.failureCounts[pid] = nil
                 self.handover.forget(owner: pid)
+                if self.lastForeignFront == pid { self.lastForeignFront = nil }
+                if self.lastWarpFront == pid { self.lastWarpFront = nil }
             }
         }
 

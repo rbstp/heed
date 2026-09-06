@@ -61,6 +61,23 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
   the edge of the arrangement is a dead end rather than a wrap. Pair it with a tiling shortcut:
   Raycast's halves and quarters put the windows where these then move between.
 
+## Mouse follows focus
+
+Focus moved by keyboard leaves the pointer over the window you just left, and the next flick of the
+mouse drags focus back there. Turn it around and the pointer follows focus into the new window:
+
+```sh
+defaults write io.github.rbstp.heed warpPointer -bool true
+make restart
+```
+
+It moves on Command-Tab, on the focus shortcuts, on a window picked from Raycast's Switch Windows,
+and on any other keyboard-driven activation. It does not move for a click, mid-drag, into a window
+Heed would not focus by pointer, or when the pointer is already inside the window. `warpX` and
+`warpY` place it inside the window as percentages; the default is the centre.
+
+Off by default, and it needs `handoverGuard` on, which it is by default.
+
 Change or disable the shortcuts:
 
 ```sh
@@ -104,6 +121,8 @@ Heed follows the pointer but avoids the common focus fights:
 - The focus shortcuts cycle visible windows in spatial order, not stacking order, so stepping through
   them does not reorder the cycle.
 - Directional focus never wraps: running out of windows in a direction does nothing.
+- With `warpPointer` on, the pointer follows keyboard-driven focus into the new window, and the
+  window it lands in holds focus until the pointer leaves it.
 
 macOS does not separate focus from raising across applications: focusing another app brings it
 forward. The `raise` setting only orders windows within an app.
@@ -124,6 +143,9 @@ Settings live in the `io.github.rbstp.heed` defaults domain. Restart Heed after 
 | `focusRightHotkey` | off | Move focus to the nearest window to the right. |
 | `focusUpHotkey` | off | Move focus to the nearest window above. |
 | `focusDownHotkey` | off | Move focus to the nearest window below. |
+| `warpPointer` | `false` | Move the pointer into a window that took keyboard focus. |
+| `warpX` | `50` | Where in that window the pointer lands, as a percentage across. |
+| `warpY` | `50` | Where in that window the pointer lands, as a percentage down. |
 | `dwellMs` | `0` | Time the pointer must rest before focus changes. Try `200` if instant is too eager. |
 | `pollMs` | `40` | Pointer sampling interval while active. |
 | `idlePollMs` | `1000` | Heartbeat while idle. Mouse movement wakes the fast loop. |

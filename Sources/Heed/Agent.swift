@@ -456,7 +456,7 @@ final class Agent {
             machine.invalidate()
         }
 
-        let cursor = CGEvent(source: nil)?.location ?? lastCursor
+        var cursor = CGEvent(source: nil)?.location ?? lastCursor
         let moved = cursor != lastCursor
         motion.record(lastCursor.x.isFinite ? hypot(cursor.x - lastCursor.x, cursor.y - lastCursor.y) : 0)
         lastCursor = cursor
@@ -470,7 +470,8 @@ final class Agent {
         }
 
         // Before the machine can undo it: a forced hit test this tick would take focus straight back.
-        noteHandover()
+        // A warp moves the pointer out from under the position this tick read.
+        if let warped = noteHandover() { cursor = warped }
 
         let condition = currentCondition(cursorMoved: moved)
         if condition == .invalidating {
@@ -711,16 +712,19 @@ final class Agent {
     /// Ask, once a tick and before resolving the new pointer position, whether the window last under
     /// the pointer still holds focus. Movement cannot explain focus leaving a window Heed has not
     /// acted on yet.
-    private func noteHandover() {
+    @discardableResult
+    private func noteHandover() -> CGPoint? {
         handoverNotedThisTick = false
-        guard config.handoverGuard, pointerWindowKnown, sampleHandover() else { return }
+        guard config.handoverGuard, pointerWindowKnown, sampleHandover() else { return nil }
         handoverNotedThisTick = true
 
         Log.debug("focus was handed to \(frontmostName()); it keeps it until the pointer settles "
             + "somewhere else")
+        let warped = warpAfterHandover()
         // A dwell candidate formed before this must not land: the pre-apply revalidation uses the
         // raw hit test, which knows nothing about holds.
         machine.invalidate()
+        return warped
     }
 
     private func sampleHandover() -> Bool {
@@ -1052,6 +1056,72 @@ final class Agent {
         }
     }
 
+    // MARK: - Mouse follows focus
+
+    /// A click that brought an app forward left the pointer where the user put it. Its own grace,
+    /// because `clickGraceMs` is about pointer focus and may legitimately be zero.
+    private static let warpClickGrace: Double = 0.25
+
+    /// Move the pointer into a window that just took focus, so pointer focus and keyboard focus
+    /// agree rather than fight: the next hit test resolves the window that already has focus.
+    /// Returns where it landed, or nil when nothing moved.
+    private func warpPointer(into frame: CGRect, why: String) -> CGPoint? {
+        guard config.warpPointer else { return nil }
+        let cursor = CGEvent(source: nil)?.location ?? pointerLocation
+        guard let point = warpPoint(into: frame, xPercent: config.warpX, yPercent: config.warpY,
+                                    pointer: cursor, screens: screenFrames())
+        else { return nil }
+
+        CGWarpMouseCursorPosition(point)
+        // Without this the system swallows mouse movement for about a quarter second after a warp.
+        CGAssociateMouseAndMouseCursorPosition(1)
+        Log.debug("warped the pointer to \(Int(point.x)), \(Int(point.y)): \(why)")
+
+        // Re-seeded, or the jump reads as the user moving the mouse on the next tick.
+        lastCursor = point
+        motion.reset()
+        let under = hitTest(at: point)
+        if hitTestAnswered { adoptPointerWindow(under) }
+        machine.invalidate()
+        return point
+    }
+
+    /// Follow focus that arrived without the pointer: Cmd-Tab, an app activating, a window picked
+    /// from Raycast. The hold this tick just declared is re-declared around the new position, so
+    /// the pointer has to leave the window it was put in before focus can move again.
+    private func warpAfterHandover() -> CGPoint? {
+        guard config.warpPointer,
+              let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != ownPid
+        else { return nil }
+
+        // Never out of a drag, and never off a click: this is for focus the keyboard moved.
+        guard NSEvent.pressedMouseButtons == 0,
+              secondsSinceAny(of: Agent.deliberateMouseEvents)
+                >= max(config.clickGrace, Agent.warpClickGrace)
+        else { return nil }
+
+        guard let window = axElement(appElement(for: front.processIdentifier), kAXFocusedWindowAttribute),
+              let frame = axFrame(window)
+        else { return nil }
+
+        // Raycast's own palette is an excluded bundle, so opening it never drags the cursor onto it.
+        let candidate = windowCandidate(window, size: frame.size,
+                                        title: axString(window, kAXTitleAttribute),
+                                        bundleID: front.bundleIdentifier)
+        if case let .reject(why) = evaluate(candidate, policy: config.windowPolicy) {
+            Log.debug("not warping to \(front.describedAs): \(why)")
+            return nil
+        }
+
+        guard let point = warpPointer(into: frame, why: "focus was handed to \(front.describedAs)")
+        else { return nil }
+        handover.noteKeyboardFocus(anchor: anchor(for: lastPointerWindow),
+                                   number: windowNumber(under: point), pointer: point,
+                                   owner: front.processIdentifier)
+        return point
+    }
+
     // MARK: - Focus ring
 
     /// Move keyboard focus around the ring of visible windows. Runs whether or not Heed is
@@ -1098,12 +1168,16 @@ final class Agent {
             lastStep = (from: live.map { windows[$0] }, to: target)
             lastStepAt = now
 
+            // The pointer moves before the hold is declared, so the hold anchors where it lands.
+            let warped = warpPointer(into: target.frame, why: "\(what) to \(target.describedAs)")
+
             // A step between two windows of the frontmost app changes nothing `noteHandover` can
             // see, so the hold is declared here.
             if config.handoverGuard {
                 handover.noteKeyboardFocus(
-                    anchor: anchor(for: lastPointerWindow), number: number,
-                    pointer: cursor, owner: target.pid
+                    anchor: anchor(for: lastPointerWindow),
+                    number: warped.map { windowNumber(under: $0) } ?? number,
+                    pointer: warped ?? cursor, owner: target.pid
                 )
             }
             machine.invalidate()

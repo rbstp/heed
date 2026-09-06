@@ -18,6 +18,11 @@ struct Config {
     var focusRightHotkey = ""
     var focusUpHotkey = ""
     var focusDownHotkey = ""
+    /// Move the pointer into a window that took focus without it. Off by default: a cursor that
+    /// jumps unasked is worse than one left behind.
+    var warpPointer = false
+    var warpX = 50
+    var warpY = 50
     var dwellMs = 0
     var pollMs = 40
     var idlePollMs = 1_000
@@ -122,6 +127,9 @@ struct Config {
         config.focusRightHotkey = defaults.string(forKey: "focusRightHotkey") ?? config.focusRightHotkey
         config.focusUpHotkey = defaults.string(forKey: "focusUpHotkey") ?? config.focusUpHotkey
         config.focusDownHotkey = defaults.string(forKey: "focusDownHotkey") ?? config.focusDownHotkey
+        config.warpPointer = bool("warpPointer", config.warpPointer)
+        config.warpX = int("warpX", config.warpX, 0...100)
+        config.warpY = int("warpY", config.warpY, 0...100)
         config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
         config.pollMs = int("pollMs", config.pollMs, 10...1_000)
         config.idlePollMs = int("idlePollMs", config.idlePollMs, 100...10_000)

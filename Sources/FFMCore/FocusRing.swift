@@ -136,3 +136,48 @@ private func screenIndex(for frame: CGRect, in screens: [CGRect]) -> Int {
     }
     return nearest
 }
+
+/// A direction the focus shortcuts can move in.
+public enum FocusDirection: String, Sendable, CaseIterable {
+    case left, right, up, down
+}
+
+/// The window to focus when stepping out of `source` in `direction`, as an index into `windows`.
+///
+/// Candidates are the windows whose centre lies beyond the source centre along the axis. One
+/// overlapping the source across the axis beats one that does not; among equals the nearest wins,
+/// with `RingWindow.key` breaking ties. No wrapping: a dead end at the edge is information, and the
+/// ring shortcuts already cover "keep going".
+public func directionalStep(
+    from source: CGRect, in windows: [RingWindow], _ direction: FocusDirection
+) -> Int? {
+    guard !source.isNull, !windows.isEmpty else { return nil }
+
+    let horizontal = direction == .left || direction == .right
+    let forward = direction == .right || direction == .down
+
+    func along(_ frame: CGRect) -> CGFloat { horizontal ? frame.midX : frame.midY }
+    func overlaps(_ frame: CGRect) -> Bool {
+        horizontal
+            ? frame.minY < source.maxY && frame.maxY > source.minY
+            : frame.minX < source.maxX && frame.maxX > source.minX
+    }
+
+    var best: (aligned: Bool, gap: CGFloat, key: Int, index: Int)?
+    for (index, window) in windows.enumerated() {
+        let gap = along(window.frame) - along(source)
+        guard forward ? gap > 0 : gap < 0 else { continue }
+
+        let score = (aligned: overlaps(window.frame), gap: abs(gap), key: window.key, index: index)
+        guard let standing = best else {
+            best = score
+            continue
+        }
+        if (!standing.aligned && score.aligned)
+            || (standing.aligned == score.aligned
+                && (score.gap, score.key) < (standing.gap, standing.key)) {
+            best = score
+        }
+    }
+    return best?.index
+}

@@ -277,3 +277,94 @@ final class FocusRingTests: XCTestCase {
         XCTAssertEqual(visited, ["b", "c", "d", "a", "b"])
     }
 }
+
+// MARK: - Directional steps
+
+final class DirectionalStepTests: XCTestCase {
+    // A 1920x1080 display tiled into quarters, the way Raycast leaves it.
+    private let topLeft = CGRect(x: 0, y: 0, width: 960, height: 540)
+    private let topRight = CGRect(x: 960, y: 0, width: 960, height: 540)
+    private let bottomLeft = CGRect(x: 0, y: 540, width: 960, height: 540)
+    private let bottomRight = CGRect(x: 960, y: 540, width: 960, height: 540)
+
+    private var quadrants: [RingWindow] {
+        [RingWindow(frame: topLeft, key: 1), RingWindow(frame: topRight, key: 2),
+         RingWindow(frame: bottomLeft, key: 3), RingWindow(frame: bottomRight, key: 4)]
+    }
+
+    private func step(from source: CGRect, _ direction: FocusDirection,
+                      in windows: [RingWindow]? = nil) -> Int? {
+        directionalStep(from: source, in: windows ?? quadrants, direction)
+    }
+
+    func testEachQuadrantReachesItsNeighbours() {
+        XCTAssertEqual(step(from: topLeft, .right), 1)
+        XCTAssertEqual(step(from: topLeft, .down), 2)
+        XCTAssertEqual(step(from: bottomRight, .left), 2)
+        XCTAssertEqual(step(from: bottomRight, .up), 1)
+    }
+
+    func testTheEdgeIsADeadEndRatherThanAWrap() {
+        XCTAssertNil(step(from: topLeft, .left))
+        XCTAssertNil(step(from: topLeft, .up))
+        XCTAssertNil(step(from: bottomRight, .right))
+        XCTAssertNil(step(from: bottomRight, .down))
+    }
+
+    /// Sharing a row beats being closer: the window across the screen is the one meant.
+    func testAWindowSharingTheRowBeatsACloserOneThatDoesNot() {
+        let source = CGRect(x: 0, y: 400, width: 300, height: 200)
+        let sameRow = RingWindow(frame: CGRect(x: 1_200, y: 400, width: 300, height: 200), key: 2)
+        let nearer = RingWindow(frame: CGRect(x: 400, y: 0, width: 300, height: 200), key: 1)
+        XCTAssertEqual(step(from: source, .right, in: [nearer, sameRow]), 1)
+    }
+
+    /// Nothing shares the row, so distance decides.
+    func testWithNothingInTheRowTheNearestWindowWins() {
+        let source = CGRect(x: 0, y: 400, width: 300, height: 200)
+        let far = RingWindow(frame: CGRect(x: 1_200, y: 0, width: 300, height: 200), key: 2)
+        let near = RingWindow(frame: CGRect(x: 400, y: 0, width: 300, height: 200), key: 1)
+        XCTAssertEqual(step(from: source, .right, in: [far, near]), 1)
+    }
+
+    func testWindowsStackedInAColumnStepOneAtATime() {
+        let column = (0..<3).map {
+            RingWindow(frame: CGRect(x: 0, y: CGFloat($0) * 360, width: 960, height: 360), key: $0)
+        }
+        XCTAssertEqual(step(from: column[0].frame, .down, in: column), 1)
+        XCTAssertEqual(step(from: column[1].frame, .down, in: column), 2)
+        XCTAssertNil(step(from: column[2].frame, .down, in: column))
+        XCTAssertEqual(step(from: column[2].frame, .up, in: column), 1)
+    }
+
+    /// Two windows the same distance away: the lower key settles it, so the answer never wobbles.
+    func testTiesGoToTheLowerKey() {
+        let source = CGRect(x: 0, y: 400, width: 300, height: 200)
+        let upper = RingWindow(frame: CGRect(x: 600, y: 300, width: 300, height: 200), key: 7)
+        let lower = RingWindow(frame: CGRect(x: 600, y: 500, width: 300, height: 200), key: 3)
+        XCTAssertEqual(step(from: source, .right, in: [upper, lower]), 1)
+        XCTAssertEqual(step(from: source, .right, in: [lower, upper]), 0)
+    }
+
+    func testTheSourceWindowIsNeverItsOwnAnswer() {
+        XCTAssertNil(step(from: topLeft, .right, in: [RingWindow(frame: topLeft, key: 1)]))
+    }
+
+    /// A maximised window covering the source: its centre is not beyond, so there is nowhere to go.
+    func testAWindowSharingTheSourceCentreIsNotACandidate() {
+        let covering = RingWindow(frame: CGRect(x: 0, y: 0, width: 1_920, height: 1_080), key: 9)
+        let source = CGRect(x: 660, y: 240, width: 600, height: 600)
+        XCTAssertNil(step(from: source, .right, in: [covering]))
+    }
+
+    func testNoWindowsAndNoSourceMeanNoStep() {
+        XCTAssertNil(step(from: topLeft, .right, in: []))
+        XCTAssertNil(step(from: .null, .right))
+    }
+
+    /// Ring order runs across displays, so a step right off one display reaches the next.
+    func testAStepRightCrossesToTheOtherDisplay() {
+        let onTheRight = RingWindow(frame: CGRect(x: 2_400, y: 0, width: 960, height: 1_080), key: 5)
+        XCTAssertEqual(step(from: topRight, .right, in: quadrants + [onTheRight]), 4)
+    }
+}

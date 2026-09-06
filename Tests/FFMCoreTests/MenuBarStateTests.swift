@@ -37,6 +37,12 @@ final class MenuBarStateTests: XCTestCase {
         XCTAssertEqual(MenuBarState(enabled: false, trusted: true).label, "Heed, off")
     }
 
+    /// Dimming alone cannot say on or off, since it also means "no permission".
+    func testSymbolShowsTheSwitchPosition() {
+        XCTAssertEqual(MenuBarState(enabled: true, trusted: false).symbolName, "cursorarrow.rays")
+        XCTAssertEqual(MenuBarState(enabled: false, trusted: true).symbolName, "cursorarrow")
+    }
+
     func testToggleTitleOffersTheOppositeState() {
         XCTAssertEqual(MenuBarState(enabled: true, trusted: true).toggleTitle, "Turn Heed Off")
         XCTAssertEqual(MenuBarState(enabled: false, trusted: true).toggleTitle, "Turn Heed On")

@@ -28,7 +28,7 @@ final class MenuBarController: NSObject {
         super.init()
 
         guard let button = item.button else { return }
-        button.image = MenuBarController.icon()
+        showImage()
         button.imagePosition = .imageOnly
         button.target = self
         button.action = #selector(clicked)
@@ -46,6 +46,7 @@ final class MenuBarController: NSObject {
         guard let button = item.button else { return }
 
         state = MenuBarState(enabled: enabled, trusted: trusted)
+        if flashRestore == nil { showImage() }
         button.appearsDisabled = state.dimmed
         button.toolTip = state.tooltip
         button.setAccessibilityLabel(state.label)
@@ -129,20 +130,37 @@ final class MenuBarController: NSObject {
         onChooseModifier(presets[sender.tag])
     }
 
-    /// Flash the icon green or red to say whether a change took. Refusal shows longer.
+    /// Flash the glyph green or red to say whether a change took. Refusal shows longer.
     func flash(accepted: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard let button = item.button else { return }
 
         flashRestore?.cancel()
-        button.image = MenuBarController.icon(accepted ? .systemGreen : .systemRed)
+        showImage(colour: accepted ? .systemGreen : .systemRed)
 
         let restore = DispatchWorkItem { [weak self] in
-            self?.item.button?.image = MenuBarController.icon()
             self?.flashRestore = nil
+            self?.showImage()
         }
         flashRestore = restore
         DispatchQueue.main.asyncAfter(deadline: .now() + (accepted ? 0.7 : 1.3), execute: restore)
+    }
+
+    private func showImage(colour: NSColor? = nil) {
+        item.button?.image = MenuBarController.symbol(state.symbolName, colour: colour)
+    }
+
+    /// An SF Symbol at menu bar weight. A template unless coloured; a template is a mask, so the
+    /// flash colour has to be drawn into the image rather than tinted onto it.
+    private static func symbol(_ name: String, colour: NSColor?) -> NSImage {
+        var configuration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        if let colour {
+            configuration = configuration.applying(.init(paletteColors: [colour]))
+        }
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        else { return NSImage() }
+        image.isTemplate = colour == nil
+        return image
     }
 
     private static func modifierMask(_ spec: HotkeySpec) -> NSEvent.ModifierFlags {
@@ -174,44 +192,5 @@ final class MenuBarController: NSObject {
 
     private static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "(unpackaged)"
-    }
-
-    /// The app icon's cube at menu bar size, drawn per backing scale. A template image so AppKit
-    /// inverts it for the menu bar; `colour` is only for the flash, and a coloured image cannot be a
-    /// template because a template is a mask.
-    private static func icon(_ colour: NSColor? = nil) -> NSImage {
-        let side: CGFloat = 16
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
-            let r = side * 0.44
-            let hw = r * 0.8660254   // cos 30
-            let hh = r * 0.5
-            func vertex(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-                NSPoint(x: side / 2 + x, y: side / 2 + y)
-            }
-
-            let path = NSBezierPath()
-            path.lineWidth = 1.1
-            path.lineJoinStyle = .round
-            path.lineCapStyle = .round
-
-            path.move(to: vertex(0, r))
-            for corner in [vertex(hw, hh), vertex(hw, -hh), vertex(0, -r),
-                           vertex(-hw, -hh), vertex(-hw, hh)] {
-                path.line(to: corner)
-            }
-            path.close()
-
-            // The three edges meeting at the near corner, without which it reads as a hexagon.
-            for corner in [vertex(-hw, hh), vertex(hw, hh), vertex(0, -r)] {
-                path.move(to: vertex(0, 0))
-                path.line(to: corner)
-            }
-
-            (colour ?? .black).setStroke()
-            path.stroke()
-            return true
-        }
-        image.isTemplate = colour == nil
-        return image
     }
 }

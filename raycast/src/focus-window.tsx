@@ -98,7 +98,7 @@ export default function FocusWindow() {
               window.title?.trim() && window.title.trim() !== window.app ? window.app : undefined
             }
             accessories={[
-              ...(window.frontmost ? [{ icon: Icon.Dot, tooltip: "Was in front" }] : []),
+              ...(window.frontmost ? [{ tag: "front", tooltip: "Was in front" }] : []),
               {
                 text: `${window.width} × ${window.height}`,
                 tooltip: `at ${window.x}, ${window.y}`,

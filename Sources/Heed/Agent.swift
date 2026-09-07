@@ -1504,6 +1504,12 @@ final class Agent {
             return nil
         }
 
+        // The reads above are cross-process, and long enough for another app to come forward.
+        guard frontmostApp()?.processIdentifier == front.processIdentifier else {
+            Log.debug("not warping to \(front.describedAs): it is no longer frontmost")
+            return nil
+        }
+
         guard let point = warpPointer(into: frame, why: "focus was handed to \(front.describedAs)")
         else { return nil }
         handover.noteKeyboardFocus(anchor: anchor(for: lastPointerWindow),

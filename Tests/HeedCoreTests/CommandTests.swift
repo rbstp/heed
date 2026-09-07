@@ -1,5 +1,5 @@
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 final class CommandTests: XCTestCase {
     func testTheSwitchVerbs() {

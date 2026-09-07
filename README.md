@@ -33,11 +33,12 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
 
 ## Use
 
-- **Click** the pointer in the menu bar to turn focus following on or off. The pointer trails motion
-  lines while Heed is on and none while it is off. A dim icon means Heed cannot work, because it is
-  off or has no Accessibility permission; hover to see which.
-- **Right-click** (or control-click) it to change the shortcut modifier, open the log, see the
-  version, or quit. Quitting unloads the login agent until the next login.
+- **Click** the mark in the menu bar to turn focus following on or off. It holds a filled core while
+  Heed is on and is empty while it is off. A dim icon means Heed cannot work, because it is off or
+  has no Accessibility permission; hover to see which.
+- **Right-click** (or control-click) it to change the shortcut modifier, switch the window numbers
+  on or off, open the log, see the version, or quit. Quitting unloads the login agent until the next
+  login.
 - **Control+Command+H** toggles Heed from anywhere.
 - **Control+Command+Right / Left** moves keyboard focus to the next or previous visible window,
   screen by screen from left to right, then left to right within each screen. A window focused this
@@ -46,6 +47,10 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
 - **Control+Command+1** to **9** moves keyboard focus to the window with that number, counted in
   the same order: with Zen on the left and a terminal on the right, 1 is Zen and 2 is the terminal. A
   number with no window on it does nothing.
+- **Hold the modifier** on its own and each window is numbered on screen, so the digit to press can
+  be read rather than counted. They follow whichever modifier the numbered shortcuts are under, and
+  appear after a tenth of a second, so a shortcut typed at speed does not flash them. On by default;
+  **Show Window Numbers** in the right-click menu turns them off.
 - **Directional focus** moves to the nearest window left, right, up, or down of the focused one.
   Off by default, because each shortcut Heed registers is taken away from every other app:
 
@@ -187,6 +192,8 @@ Heed follows the pointer but avoids the common focus fights:
 - Directional focus never wraps: running out of windows in a direction does nothing.
 - With `warpPointer` on, the pointer follows keyboard-driven focus into the new window, and the
   window it lands in holds focus until the pointer leaves it.
+- Pointer focus is suppressed while the window numbers are up: the next keystroke is going to pick a
+  window, and following the pointer first would move focus somewhere else and renumber the rest.
 
 macOS does not separate focus from raising across applications: focusing another app brings it
 forward. The `raise` setting only orders windows within an app.
@@ -207,6 +214,8 @@ Settings live in the `io.github.rbstp.heed` defaults domain. Restart Heed after 
 | `focusRightHotkey` | off | Move focus to the nearest window to the right. |
 | `focusUpHotkey` | off | Move focus to the nearest window above. |
 | `focusDownHotkey` | off | Move focus to the nearest window below. |
+| `windowNumbers` | `true` | Number the windows on screen while the numbered shortcuts' modifier is held. |
+| `windowNumbersDelayMs` | `100` | How long that modifier must be held first. |
 | `warpPointer` | `false` | Move the pointer into a window that took keyboard focus. |
 | `warpX` | `50` | Where in that window the pointer lands, as a percentage across. |
 | `warpY` | `50` | Where in that window the pointer lands, as a percentage down. |

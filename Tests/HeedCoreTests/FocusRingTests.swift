@@ -1,6 +1,6 @@
 import CoreGraphics
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 final class FocusRingTests: XCTestCase {
     // Two 1920x1080 displays side by side, top-left origin.

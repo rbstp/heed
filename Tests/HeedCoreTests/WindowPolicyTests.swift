@@ -1,7 +1,7 @@
 import ApplicationServices
 import CoreGraphics
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 final class WindowSourceTests: XCTestCase {
 

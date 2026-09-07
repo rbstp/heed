@@ -2,8 +2,8 @@ import AppKit
 import ApplicationServices
 import Carbon
 import CoreGraphics
-import FFMCore
 import Foundation
+import HeedCore
 
 final class Agent {
     private let systemWide = AXUIElementCreateSystemWide()
@@ -19,6 +19,24 @@ final class Agent {
     private var menuBar: MenuBarController?
     private var hotkeys: [Hotkey] = []
     private var shortcut: HotkeySpec?
+    private var numberOverlay: NumberOverlay?
+    /// The modifier the numbered shortcuts are registered under, which is the one that raises the
+    /// numbers. Nil when no numbered shortcut is registered, and then nothing raises them.
+    private var numberModifiers: Set<HotkeySpec.Modifier>?
+    /// `config.windowNumbers` and its delay, mirrored for the main thread by `syncMenuBar`.
+    private var numbersEnabled = true
+    private var numbersDelay = 0.1
+    private var numberWatch: [Any] = []
+    private var numbersArmWork: DispatchWorkItem?
+    private var numbersWatchdog: DispatchSourceTimer?
+    /// A ring is being built for the numbers, and whether another was asked for while it was.
+    /// Building one is the most expensive thing the agent does, and it runs on the queue the focus
+    /// loop and the shortcuts themselves need, so a burst of shortcuts must not queue a build each.
+    private var numbersBuilding = false
+    private var numbersAskedAgain = false
+    /// Bumped whenever the numbers are asked for or taken down, so a ring that finished building
+    /// after the key was let go is discarded rather than shown.
+    private var numbersGeneration = 0
     /// Mirrors "the loop is idling", so a mouse event costs one bool test rather than a dispatch.
     private var wantsMouseWake = false
     private var mouseMonitor: Any?
@@ -48,6 +66,8 @@ final class Agent {
     private var failureCounts: [pid_t: Int] = [:]
 
     private var isRunning = false
+    /// Whether the window numbers are on screen. Written from the main thread through `queue`.
+    private var numbersShowing = false
     private var overlayCached = false
     private var overlayCacheUntil: Double = 0
     private var handover = FocusHandover<Target>(settle: 0)
@@ -92,6 +112,8 @@ final class Agent {
             lastForeignFront = frontmostForFocus()
             scheduleTimer()
             syncMenuBar()
+            // Only now: a global key monitor is given nothing until Accessibility is granted.
+            DispatchQueue.main.async { [self] in installNumberWatch() }
             Log.note("running: enabled=\(config.enabled) dwell=\(config.dwellMs)ms "
                 + "poll=\(config.pollMs)ms raise=\(config.raise) "
                 + "typingCooldown=\(config.typingCooldownMs)ms "
@@ -105,6 +127,11 @@ final class Agent {
             pendingInvalidation = true
             wakeLoop()
         }
+        // Windows are somewhere else now, so numbers drawn a moment ago point at the wrong ones and
+        // the digits they promise belong to a ring that has been rebuilt underneath them. A Space
+        // change and a display rearrangement both move windows without touching the modifier, so
+        // nothing else here would notice.
+        DispatchQueue.main.async { [self] in refreshNumbers() }
     }
 
     private func scheduleTimer() {
@@ -236,7 +263,14 @@ final class Agent {
     private func syncMenuBar() {
         let wanted = config.menuBarIcon
         let enabled = config.enabled
+        let numbers = config.windowNumbers
+        let delay = config.windowNumbersDelay
         DispatchQueue.main.async { [self] in
+            // Before the menu bar guard: the numbers do not depend on the status item being shown.
+            numbersEnabled = numbers
+            numbersDelay = delay
+            if !numbers { hideNumbers() }
+
             guard wanted else {
                 menuBar?.remove()
                 menuBar = nil
@@ -250,9 +284,11 @@ final class Agent {
                         self?.changeModifiers(to: preset) { accepted in
                             self?.menuBar?.flash(accepted: accepted)
                         }
-                    }
+                    },
+                    onToggleNumbers: { [weak self] in self?.toggleWindowNumbers() }
                 )
             }
+            menuBar?.showsNumbers = numbers
             menuBar?.shortcut = shortcut
             // Read here rather than carried across the hop: trust can change at any moment.
             menuBar?.render(enabled: enabled, trusted: accessibilityTrusted(prompt: false))
@@ -407,6 +443,12 @@ final class Agent {
         shortcut = specs.first.flatMap { $0 }
         menuBar?.shortcut = shortcut
         menuBar?.modifiers = specs.compactMap { $0 }.first?.modifiers
+        // The numbers stand for the numbered shortcuts, so they follow that setting's modifier
+        // rather than the toggle's: the two need not be the same, and only one is being pictured.
+        let numbered = Shortcut.allCases.firstIndex(of: .focusWindow)
+        numberModifiers = numbered.flatMap { specs.indices.contains($0) ? specs[$0] : nil }?.modifiers
+        // A changed shortcut renumbers nothing, but the numbers on screen were drawn for the old one.
+        hideNumbers()
     }
 
     /// Put every shortcut under a different modifier, keeping each key. All or none, and stored only
@@ -454,6 +496,216 @@ final class Agent {
                 }
             }
         }
+    }
+
+    // MARK: - Window numbers
+
+    /// Watch the modifier keys, so holding the one the numbered shortcuts are registered under puts
+    /// their numbers on the windows they would reach.
+    ///
+    /// Installed from `start`, which runs only once Accessibility is granted: a global key monitor
+    /// is handed nothing without it, and would sit there silently never firing.
+    private func installNumberWatch() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard numberWatch.isEmpty else { return }
+
+        numberOverlay = NumberOverlay()
+        // Global for every other app; local because a menu of ours makes Heed the active one, and a
+        // global monitor is not given events while that is true.
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: {
+            [weak self] event in self?.modifiersChanged(event.modifierFlags)
+        }) {
+            numberWatch.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: {
+            [weak self] event in
+            self?.modifiersChanged(event.modifierFlags)
+            return event
+        }) {
+            numberWatch.append(local)
+        }
+    }
+
+    /// Raise the numbers after a beat of holding, and take them down the moment the combination
+    /// changes. The beat is what keeps a quick ⌃⌘→ from flashing numbers across every screen.
+    private func modifiersChanged(_ flags: NSEvent.ModifierFlags) {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        guard numbersEnabled,
+              numbersArmed(pressed: Agent.modifiers(from: flags), wanted: numberModifiers)
+        else {
+            hideNumbers()
+            return
+        }
+        // Already counting down, or already up: a modifier pressed in some other order arrives as
+        // several events, and each must not start a fresh countdown.
+        guard numbersArmWork == nil, numberOverlay?.isShowing != true else { return }
+
+        let work = DispatchWorkItem { [weak self] in
+            self?.numbersArmWork = nil
+            self?.requestNumbers()
+        }
+        numbersArmWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + numbersDelay, execute: work)
+    }
+
+    /// Build the ring the numbered shortcuts would act on and badge it.
+    ///
+    /// Counted by generation: building a ring is many cross-process calls, and the key can be let go
+    /// during them, so an answer that arrives after the numbers were dismissed is dropped.
+    private func requestNumbers() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        numbersGeneration += 1
+        let generation = numbersGeneration
+
+        // One build at a time, with at most one more remembered: a shortcut held down would
+        // otherwise put a build on the queue per repeat, and each one delays the next shortcut.
+        guard !numbersBuilding else {
+            numbersAskedAgain = true
+            return
+        }
+        numbersBuilding = true
+
+        queue.async { [self] in
+            let badges: [NumberBadge]? = accessibilityTrusted(prompt: false)
+                ? focusRing().map { numberBadges(at: badgeCentres(for: $0)) }
+                : nil
+
+            DispatchQueue.main.async { [self] in
+                numbersBuilding = false
+                defer { askAgainIfPending() }
+                guard generation == numbersGeneration else { return }
+
+                // A ring that could not be built says nothing about the one on screen, and what is
+                // on screen was drawn for an arrangement that has since changed. Take it away
+                // rather than leave numbers standing that may no longer name these windows.
+                guard let badges, !badges.isEmpty else {
+                    hideNumbers()
+                    return
+                }
+                guard let overlay = numberOverlay,
+                      numbersArmed(pressed: Agent.modifiers(from: NSEvent.modifierFlags),
+                                   wanted: numberModifiers)
+                else { return }
+                overlay.show(badges)
+                watchTheModifier()
+                Log.debug("window numbers: showing 1 to \(badges.count)")
+                // The numbers are up because a window is about to be picked by keyboard; following
+                // the pointer under them would take focus somewhere else first.
+                queue.async { [self] in numbersShowing = true }
+            }
+        }
+    }
+
+    /// Run the build that was asked for while the last one was in flight, so the numbers settle on
+    /// the arrangement as it finally is rather than as it was two shortcuts ago.
+    private func askAgainIfPending() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard numbersAskedAgain else { return }
+        numbersAskedAgain = false
+        guard numberOverlay?.isShowing == true || numbersArmWork != nil else { return }
+        requestNumbers()
+    }
+
+    /// Where each ring window's number goes: the middle of the largest part of it that nothing in
+    /// front covers, so the digit sits on the window it names rather than on whatever buried it.
+    ///
+    /// The stack is read again rather than carried out of `focusRing`, which judges visibility but
+    /// keeps no record of what did the covering. One window server round trip, for at most nine
+    /// windows, on a key the user is deliberately holding down.
+    private func badgeCentres(for ring: Ring) -> [CGPoint] {
+        let stack = onScreenWindows().filter { $0.level == 0 }
+        let frames = stack.map(\.frame)
+        var depth: [Int: Int] = [:]
+        for (index, window) in stack.enumerated() { depth[window.number] = index }
+
+        return zip(ring.ids, ring.windows).map { id, window in
+            // No depth means the window server no longer lists it; its own centre is the only
+            // answer left, and the show is about to be overtaken by the next build anyway.
+            guard let depth = depth[id] else { return CGPoint(x: window.frame.midX,
+                                                              y: window.frame.midY) }
+            return visibleCentre(of: window.frame, behind: frames[..<depth])
+        }
+    }
+
+    /// Ask every so often whether the modifier is still down, and take the numbers away when it is
+    /// not.
+    ///
+    /// A release can go unseen: secure event input takes the keyboard away from every monitor, so
+    /// letting go inside a password field delivers nothing. Without this the numbers would sit
+    /// there for good, with focus following held off behind them. `NSEvent.modifierFlags` is a
+    /// snapshot of state rather than a round trip, so asking twice a second costs nothing.
+    private func watchTheModifier() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard numbersWatchdog == nil else { return }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            guard numbersArmed(pressed: Agent.modifiers(from: NSEvent.modifierFlags),
+                               wanted: numberModifiers)
+            else {
+                Log.debug("window numbers: the modifier went up unseen")
+                hideNumbers()
+                return
+            }
+        }
+        timer.resume()
+        numbersWatchdog = timer
+    }
+
+    private func hideNumbers() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        numbersArmWork?.cancel()
+        numbersArmWork = nil
+        numbersWatchdog?.cancel()
+        numbersWatchdog = nil
+        numbersAskedAgain = false
+        numbersGeneration += 1
+
+        guard numberOverlay?.isShowing == true else { return }
+        numberOverlay?.hide()
+        Log.debug("window numbers: hidden")
+        queue.async { [self] in
+            numbersShowing = false
+            // Following was held off while the numbers were up; pick the pointer back up at once
+            // rather than at whatever the idle heartbeat would be.
+            pendingInvalidation = true
+            wakeLoop()
+        }
+    }
+
+    /// Redraw the numbers after a focus shortcut, while the modifier is still down.
+    ///
+    /// Ring order is spatial, so raising a window does not renumber anything; a window the raise
+    /// uncovered, though, joins the ring and shifts every number after it.
+    private func refreshNumbers() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard numberOverlay?.isShowing == true,
+              numbersArmed(pressed: Agent.modifiers(from: NSEvent.modifierFlags),
+                           wanted: numberModifiers)
+        else { return }
+        requestNumbers()
+    }
+
+    func toggleWindowNumbers() {
+        queue.async { [self] in
+            config.windowNumbers.toggle()
+            Config.store().set(config.windowNumbers, forKey: "windowNumbers")
+            Log.note(config.windowNumbers ? "window numbers on" : "window numbers off")
+            syncMenuBar()
+        }
+    }
+
+    private static func modifiers(from flags: NSEvent.ModifierFlags) -> Set<HotkeySpec.Modifier> {
+        let held = flags.intersection(.deviceIndependentFlagsMask)
+        var pressed: Set<HotkeySpec.Modifier> = []
+        if held.contains(.command) { pressed.insert(.command) }
+        if held.contains(.control) { pressed.insert(.control) }
+        if held.contains(.option) { pressed.insert(.option) }
+        if held.contains(.shift) { pressed.insert(.shift) }
+        return pressed
     }
 
     // MARK: - Main loop
@@ -558,6 +810,10 @@ final class Agent {
             Log.debug("invalidated by a system event")
             return .invalidating
         }
+
+        // A window is about to be picked by number; moving focus under the pointer first would
+        // both fight the keystroke and renumber what the user is reading.
+        if numbersShowing { return .suppressing }
 
         // An instantaneous snapshot; the grace period covers presses it cannot see.
         if NSEvent.pressedMouseButtons != 0 { return .suppressing }
@@ -1236,6 +1492,7 @@ final class Agent {
             }
             machine.invalidate()
             wakeLoop()
+            DispatchQueue.main.async { [self] in refreshNumbers() }
         }
     }
 

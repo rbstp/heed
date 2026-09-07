@@ -1,5 +1,5 @@
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 final class TitleRuleTests: XCTestCase {
     private let outlook = "com.microsoft.Outlook"

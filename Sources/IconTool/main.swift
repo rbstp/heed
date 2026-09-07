@@ -1,13 +1,14 @@
-// Renders the Heed app icon at a given size. Run: swift Tools/make-icon.swift <size> <out.png>
+// Renders the Heed app icon at a given size. Run: swift run heed-icon <size> <out.png>
 //
-// The same SF Symbol the menu bar item shows, white on a dark tile, so the two match. Drawn in code
-// so the whole iconset is reproducible with nothing but the system toolchain.
+// The same mark the menu bar item shows, white on a dark tile, so the two match. Drawn in code from
+// `HeedCore.glyphPath`, so the whole iconset is reproducible and cannot drift from the menu bar.
 
 import AppKit
+import HeedCore
 
 let args = CommandLine.arguments
 guard args.count == 3, let size = Int(args[1]), size > 0 else {
-    FileHandle.standardError.write(Data("usage: make-icon.swift <size> <out.png>\n".utf8))
+    FileHandle.standardError.write(Data("usage: heed-icon <size> <out.png>\n".utf8))
     exit(2)
 }
 let out = URL(fileURLWithPath: args[2])
@@ -32,16 +33,13 @@ let backdrop = NSGradient(
 )!
 backdrop.draw(in: NSBezierPath(roundedRect: tile, xRadius: radius, yRadius: radius), angle: -90)
 
-let configuration = NSImage.SymbolConfiguration(pointSize: side * 0.46, weight: .regular)
-    .applying(.init(paletteColors: [.white]))
-let name = "cursorarrow.motionlines"
-guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-    .withSymbolConfiguration(configuration)
-else { exit(1) }
-symbol.isTemplate = false
-let glyph = symbol.size
-symbol.draw(in: NSRect(x: (side - glyph.width) / 2, y: (side - glyph.height) / 2,
-                       width: glyph.width, height: glyph.height))
+// Larger than a symbol's box would be: the mark reaches along the axes and leaves the corners
+// empty, so matching a square glyph's proportions would leave it looking lost on the tile.
+let glyph = side * 0.66
+context.cgContext.translateBy(x: (side - glyph) / 2, y: (side - glyph) / 2)
+context.cgContext.addPath(glyphPath(.attending, side: glyph))
+context.cgContext.setFillColor(.white)
+context.cgContext.fillPath()
 
 NSGraphicsContext.restoreGraphicsState()
 guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }

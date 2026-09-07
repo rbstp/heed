@@ -1,5 +1,5 @@
-import FFMCore
 import Foundation
+import HeedCore
 
 let bundleID = "io.github.rbstp.heed"
 /// Distributed notification a second copy of the binary posts to reach the running agent.
@@ -20,6 +20,12 @@ struct Config {
     var focusRightHotkey = ""
     var focusUpHotkey = ""
     var focusDownHotkey = ""
+    /// Put the ring numbers on the windows while the numbered shortcuts' modifier is held, so the
+    /// digit to press can be read off the screen rather than counted.
+    var windowNumbers = true
+    /// How long the modifier has to be held first. Short enough to feel immediate, long enough that
+    /// the modifier of a shortcut typed at speed is back up before anything is drawn.
+    var windowNumbersDelayMs = 100
     /// Move the pointer into a window that took focus without it. Off by default: a cursor that
     /// jumps unasked is worse than one left behind.
     var warpPointer = false
@@ -59,6 +65,7 @@ struct Config {
     var typingCooldown: Double { Double(typingCooldownMs) / 1000 }
     var clickGrace: Double { Double(clickGraceMs) / 1000 }
     var handoverSettle: Double { Double(handoverSettleMs) / 1000 }
+    var windowNumbersDelay: Double { Double(windowNumbersDelayMs) / 1000 }
     var verifyTimeout: Double { Double(verifyTimeoutMs) / 1000 }
 
     /// Overlay and transient-chrome apps the pointer would otherwise chase. Mission Control and
@@ -129,6 +136,8 @@ struct Config {
         config.focusRightHotkey = defaults.string(forKey: "focusRightHotkey") ?? config.focusRightHotkey
         config.focusUpHotkey = defaults.string(forKey: "focusUpHotkey") ?? config.focusUpHotkey
         config.focusDownHotkey = defaults.string(forKey: "focusDownHotkey") ?? config.focusDownHotkey
+        config.windowNumbers = bool("windowNumbers", config.windowNumbers)
+        config.windowNumbersDelayMs = int("windowNumbersDelayMs", config.windowNumbersDelayMs, 0...2_000)
         config.warpPointer = bool("warpPointer", config.warpPointer)
         config.warpX = int("warpX", config.warpX, 0...100)
         config.warpY = int("warpY", config.warpY, 0...100)

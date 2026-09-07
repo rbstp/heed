@@ -1,5 +1,5 @@
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 final class HotkeySpecTests: XCTestCase {
     /// The shipped default. If this changes, so does the README.

@@ -138,10 +138,12 @@ extension Set where Element == HotkeySpec.Modifier {
 
 /// The first two claims on the same combination. Whichever is registered second is refused, and
 /// the refusal reads as another app holding it when the other holder is us.
-public func firstClash<Name>(in claims: [(name: Name, spec: HotkeySpec)]) -> (Name, Name)? {
+public func firstClash<Name>(
+    in claims: [(name: Name, spec: HotkeySpec)]
+) -> (earlier: Name, later: Name, spec: HotkeySpec)? {
     var seen: [HotkeySpec: Name] = [:]
     for claim in claims {
-        if let earlier = seen[claim.spec] { return (earlier, claim.name) }
+        if let earlier = seen[claim.spec] { return (earlier, claim.name, claim.spec) }
         seen[claim.spec] = claim.name
     }
     return nil

@@ -377,13 +377,14 @@ final class Agent {
     /// combination another app holds costs that one shortcut, not the other two.
     private func syncHotkey() {
         let texts = shortcutTexts
+        let under = sharedModifiers(of: texts, primary: Agent.toggleIndex)
         DispatchQueue.main.async { [self] in
             registrations = [:]
-            adopt(specs: [])
+            adopt(specs: [], under: [])
 
             let claimed = claim(texts)
             registrations = claimed.held
-            adopt(specs: claimed.specs)
+            adopt(specs: claimed.specs, under: under)
             announce(specs: claimed.specs)
         }
     }
@@ -397,7 +398,7 @@ final class Agent {
     /// before the working shortcuts are given up. `specs` is in `Shortcut.allCases` order; `refused`
     /// means a combination could not be had, whoever holds it.
     private func claim(_ texts: [String]) -> (held: [Shortcut: Registration], specs: [HotkeySpec?],
-                                              refused: Bool) {
+                                              refused: Bool, clashes: Set<Shortcut>) {
         dispatchPrecondition(condition: .onQueue(.main))
 
         // Read before anything is registered, so a clash is caught as one.
@@ -425,19 +426,22 @@ final class Agent {
         }
 
         var refused = false
+        // Both sides of every clash, so a caller can tell one its own change caused from one the
+        // settings already had.
+        var clashes: Set<Shortcut> = []
 
         // A combination belongs to one action. The later claim is dropped rather than the whole
-        // set, so the rest still register; `refused` stops the menu applying a half-moved set.
+        // set, so the rest still register.
         while true {
             let claims = Shortcut.allCases.flatMap { shortcut in
                 (wanted[shortcut] ?? []).map { (name: shortcut, spec: $0.0) }
             }
-            guard let (first, second) = firstClash(in: claims) else { break }
-            let combination = claims.first { $0.name == second }?.spec.display ?? "that combination"
-            Log.note("hotkey \(combination) already \(first.which), so nothing \(second.which)")
-            wanted[second] = nil
-            if let index = Shortcut.allCases.firstIndex(of: second) { specs[index] = nil }
-            refused = true
+            guard let clash = firstClash(in: claims) else { break }
+            Log.note("hotkey \(clash.spec.display) already \(clash.earlier.which), "
+                + "so nothing \(clash.later.which)")
+            wanted[clash.later] = nil
+            if let index = Shortcut.allCases.firstIndex(of: clash.later) { specs[index] = nil }
+            clashes.formUnion([clash.earlier, clash.later])
         }
 
         var held: [Shortcut: Registration] = [:]
@@ -447,6 +451,16 @@ final class Agent {
             // Carbon refuses a combination this process already holds.
             if let standing = registrations[shortcut], standing.spec == spec {
                 held[shortcut] = standing
+                continue
+            }
+
+            // The registrations are not released before this runs, so a combination another
+            // setting is still holding would come back from Carbon as another app having it.
+            if let owner = standingHolder(of: combinations.map(\.0), excluding: shortcut) {
+                Log.note("hotkey \(owner.spec.display) is one Heed already has: it "
+                    + "\(owner.shortcut.which), so nothing \(shortcut.which)")
+                specs[index] = nil
+                refused = true
                 continue
             }
 
@@ -462,7 +476,20 @@ final class Agent {
             }
             held[shortcut] = Registration(spec: spec, keys: keys)
         }
-        return (held, specs, refused)
+        return (held, specs, refused, clashes)
+    }
+
+    /// Which other setting's live registration already holds one of `combinations`.
+    private func standingHolder(
+        of combinations: [HotkeySpec], excluding shortcut: Shortcut
+    ) -> (shortcut: Shortcut, spec: HotkeySpec)? {
+        let asked = Set(combinations)
+        for other in Shortcut.allCases where other != shortcut {
+            guard let standing = registrations[other] else { continue }
+            let holds = self.combinations(for: other, standing.spec)?.map(\.0) ?? []
+            if let shared = holds.first(where: asked.contains) { return (other, shared) }
+        }
+        return nil
     }
 
     private func announce(specs: [HotkeySpec?]) {
@@ -478,10 +505,12 @@ final class Agent {
     /// `Shortcut.allCases` order is the order `claim` reports in.
     private static let toggleIndex = Shortcut.allCases.firstIndex(of: .toggle) ?? 0
 
-    private func adopt(specs: [HotkeySpec?]) {
+    /// `under` is what `changeModifiers` would replace, so the tick cannot claim a modifier the
+    /// menu would not actually move away from.
+    private func adopt(specs: [HotkeySpec?], under: Set<HotkeySpec.Modifier>) {
         shortcut = specs.indices.contains(Agent.toggleIndex) ? specs[Agent.toggleIndex] : nil
         menuBar?.shortcut = shortcut
-        menuBar?.modifiers = shortcut?.modifiers ?? specs.compactMap { $0 }.first?.modifiers
+        menuBar?.modifiers = under.isEmpty ? nil : under
         // The numbers stand for the numbered shortcuts, so they follow that setting's modifier
         // rather than the toggle's: the two need not be the same, and only one is being pictured.
         let numbered = Shortcut.allCases.firstIndex(of: .focusWindow)
@@ -498,6 +527,11 @@ final class Agent {
             let current = shortcutTexts
             let under = sharedModifiers(of: current, primary: Agent.toggleIndex)
             let texts = rewriteHotkeys(current, under: under, to: preset.modifiers)
+            // A duplicate the settings already had is not this change's doing, and must not make
+            // every preset refuse for good.
+            let moved = Set(zip(Shortcut.allCases, zip(current, texts)).compactMap { shortcut, pair in
+                HotkeySpec(pair.0) == HotkeySpec(pair.1) ? nil : shortcut
+            })
 
             // Compared as combinations: the stored text is however it was typed, the rewrite is
             // canonical.
@@ -508,13 +542,13 @@ final class Agent {
 
             DispatchQueue.main.async { [self] in
                 let claimed = claim(texts)
-                guard !claimed.refused else {
+                guard !claimed.refused, claimed.clashes.isDisjoint(with: moved) else {
                     Log.note("keeping the current shortcuts: \(preset.display) could not be had")
                     report(false)
                     return
                 }
                 registrations = claimed.held
-                adopt(specs: claimed.specs)
+                adopt(specs: claimed.specs, under: preset.modifiers)
                 announce(specs: claimed.specs)
 
                 queue.async { [self] in

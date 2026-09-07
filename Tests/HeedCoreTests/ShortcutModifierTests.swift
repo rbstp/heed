@@ -61,8 +61,9 @@ final class ShortcutModifierTests: XCTestCase {
             (name: "left", spec: HotkeySpec("ctrl+alt+cmd+h")!),
         ]
         let clash = firstClash(in: claims)
-        XCTAssertEqual(clash?.0, "toggle")
-        XCTAssertEqual(clash?.1, "left")
+        XCTAssertEqual(clash?.earlier, "toggle")
+        XCTAssertEqual(clash?.later, "left")
+        XCTAssertEqual(clash?.spec, HotkeySpec("ctrl+alt+cmd+h"))
     }
 
     func testNoClashWhenEveryCombinationIsDistinct() {
@@ -81,6 +82,27 @@ final class ShortcutModifierTests: XCTestCase {
         XCTAssertNil(firstClash(in: claims))
     }
 
+    /// A duplicate the settings already had is not the change's doing: the settings that move are
+    /// disjoint from it, so the menu must still apply.
+    func testADuplicateAmongUnmovedSettingsIsNotCausedByTheChange() {
+        // Two directional settings on one combination, and the four main ones under Control-Command.
+        let typo = ["ctrl+cmd+h", "cmd+ctrl+right", "cmd+ctrl+left", "cmd+ctrl+1",
+                    "cmd+ctrl+alt+a", "cmd+ctrl+alt+d", "cmd+ctrl+alt+k", "cmd+ctrl+alt+k"]
+        let under = sharedModifiers(of: typo)
+        let texts = rewriteHotkeys(typo, under: under, to: [.option, .command])
+
+        let moved = Set(zip(typo, texts).enumerated().compactMap { index, pair in
+            HotkeySpec(pair.0) == HotkeySpec(pair.1) ? nil : index
+        })
+        let claims = texts.enumerated().compactMap { index, text in
+            HotkeySpec(text).map { (name: index, spec: $0) }
+        }
+        let clash = firstClash(in: claims)
+        XCTAssertEqual(clash?.later, 7, "the second of the two duplicated settings")
+        XCTAssertTrue(moved.isDisjoint(with: [clash!.earlier, clash!.later]),
+                      "neither side of the clash moved, so it must not block the change")
+    }
+
     /// Picking the modifier the directional shortcuts already use genuinely cannot be done.
     func testMovingOntoTheDirectionalModifierClashes() {
         let moved = rewriteHotkeys(defaults, under: [.control, .command],
@@ -89,7 +111,7 @@ final class ShortcutModifierTests: XCTestCase {
             HotkeySpec(text).map { (name: index, spec: $0) }
         }
         let clash = firstClash(in: claims)
-        XCTAssertEqual(clash?.0, 0, "the toggle")
-        XCTAssertEqual(clash?.1, 4, "focus left, which is also H")
+        XCTAssertEqual(clash?.earlier, 0, "the toggle")
+        XCTAssertEqual(clash?.later, 4, "focus left, which is also H")
     }
 }

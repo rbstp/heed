@@ -8,8 +8,9 @@ let quitPlan = QuitPlan(
     uid: getuid()
 )
 
-/// dropping your own job. launchd removes the job before signalling it, so being killed mid-wait
-/// is the ordinary outcome.
+/// Under the login agent this unloads the job through `launchctl`, since there is no API for
+/// dropping your own job. launchd removes the job before signalling it, so being killed
+/// mid-wait is the ordinary outcome.
 func quitHeed() {
     dispatchPrecondition(condition: .onQueue(.main))
 

@@ -33,33 +33,7 @@ public func isVisible(
     _ frame: CGRect, behind covering: some Sequence<CGRect>, minimum: CGFloat = 40
 ) -> Bool {
     guard frame.width >= minimum, frame.height >= minimum else { return false }
-
-    var columns: Set<CGFloat> = [frame.minX, frame.maxX]
-    var rows: Set<CGFloat> = [frame.minY, frame.maxY]
-    var covers: [CGRect] = []
-    for cover in covering {
-        let overlap = cover.intersection(frame)
-        guard !overlap.isNull, !overlap.isEmpty else { continue }
-        covers.append(overlap)
-        columns.insert(overlap.minX)
-        columns.insert(overlap.maxX)
-        rows.insert(overlap.minY)
-        rows.insert(overlap.maxY)
-    }
-    guard !covers.isEmpty else { return true }
-
-    let x = columns.sorted()
-    let y = rows.sorted()
-    var covered = [[Bool]](repeating: [Bool](repeating: false, count: x.count - 1),
-                           count: y.count - 1)
-    for cover in covers {
-        for row in 0..<(y.count - 1) where y[row] >= cover.minY && y[row + 1] <= cover.maxY {
-            for column in 0..<(x.count - 1)
-            where x[column] >= cover.minX && x[column + 1] <= cover.maxX {
-                covered[row][column] = true
-            }
-        }
-    }
+    guard let (x, y, covered) = coverGrid(of: frame, behind: covering) else { return true }
 
     for left in 0..<(x.count - 1) {
         var blocked = [Bool](repeating: false, count: y.count - 1)
@@ -100,7 +74,8 @@ public func ringStep(count: Int, from current: Int?, by delta: Int) -> Int? {
     return stepped < 0 ? stepped + count : stepped
 }
 
-private func screenIndex(for frame: CGRect, in screens: [CGRect]) -> Int {
+/// The display a window mostly sits on, falling back to the nearest when none of it shows.
+func screenIndex(for frame: CGRect, in screens: [CGRect]) -> Int {
     guard !screens.isEmpty else { return 0 }
 
     var best = 0

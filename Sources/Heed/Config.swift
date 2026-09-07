@@ -75,8 +75,9 @@ struct Config {
         "com.lwouis.alt-tab-macos",
     ]
 
-    /// AXStandardWindow, minimize and zoom buttons), so it is matched on its exact titles. English and
-    /// French only; another locale needs an `excludedWindowTitles` entry.
+    /// Outlook's meeting reminder is structurally indistinguishable from a document window
+    /// (subrole AXStandardWindow, minimize and zoom buttons), so it is matched on its exact
+    /// titles. English and French only; another locale needs an `excludedWindowTitles` entry.
     static let builtinTitleExclusions: [(bundleID: String?, pattern: String)] = [
         ("com.microsoft.Outlook", "^[0-9]+ (Reminders?|rappels?)$"),
     ]
@@ -117,15 +118,10 @@ struct Config {
 
         config.enabled = bool("enabled", config.enabled)
         config.menuBarIcon = bool("menuBarIcon", config.menuBarIcon)
-        config.hotkey = defaults.string(forKey: "hotkey") ?? config.hotkey
-        config.focusNextHotkey = defaults.string(forKey: "focusNextHotkey") ?? config.focusNextHotkey
-        config.focusPreviousHotkey =
-            defaults.string(forKey: "focusPreviousHotkey") ?? config.focusPreviousHotkey
-        config.focusWindowHotkey = defaults.string(forKey: "focusWindowHotkey") ?? config.focusWindowHotkey
-        config.focusLeftHotkey = defaults.string(forKey: "focusLeftHotkey") ?? config.focusLeftHotkey
-        config.focusRightHotkey = defaults.string(forKey: "focusRightHotkey") ?? config.focusRightHotkey
-        config.focusUpHotkey = defaults.string(forKey: "focusUpHotkey") ?? config.focusUpHotkey
-        config.focusDownHotkey = defaults.string(forKey: "focusDownHotkey") ?? config.focusDownHotkey
+        for shortcut in Shortcut.allCases {
+            guard let text = defaults.string(forKey: shortcut.defaultsKey) else { continue }
+            config[keyPath: shortcut.keyPath] = text
+        }
         config.windowNumbers = bool("windowNumbers", config.windowNumbers)
         config.windowNumbersDelayMs = int("windowNumbersDelayMs", config.windowNumbersDelayMs, 0...2_000)
         config.warpPointer = bool("warpPointer", config.warpPointer)

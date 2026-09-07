@@ -1,7 +1,7 @@
 import { Action, ActionPanel, Icon, Keyboard, List, getApplications } from "@raycast/api";
 import { useExec } from "@raycast/utils";
 import { useEffect, useMemo, useState } from "react";
-import { bundleID, tell } from "./heed";
+import { findHeed, tell } from "./heed";
 
 /// One entry of `Heed --windows`. `id` is the window server's own number, which survives Heed
 /// rebuilding its ring; `number` is only the place in that ring, so it is shown, never sent.
@@ -42,7 +42,7 @@ export default function FocusWindow() {
   useEffect(() => {
     getApplications()
       .then((apps) => {
-        const heed = apps.find((app) => app.bundleId === bundleID);
+        const heed = findHeed(apps);
         if (!heed) {
           setMissing("brew install --cask rbstp/tap/heed");
           return;

@@ -36,8 +36,7 @@ final class Agent {
     /// Bumped whenever the numbers are asked for or taken down, so a ring that finished building
     /// after the key was let go is discarded rather than shown.
     private var numbersGeneration = 0
-    /// Mirrors "the loop is idling", so a mouse event costs one bool test rather than a dispatch.
-    private var wantsMouseWake = false
+    /// Installed only while the loop is idling; its presence is what "idling" means here.
     private var mouseMonitor: Any?
     private var observersInstalled = false
 
@@ -164,8 +163,29 @@ final class Agent {
         setMouseWake(idling)
     }
 
+    /// The monitor is handed every mouse event on the system, so it is installed only while the
+    /// loop is idling: at full poll there is nothing left for it to wake.
     private func setMouseWake(_ wanted: Bool) {
-        DispatchQueue.main.async { [self] in wantsMouseWake = wanted }
+        DispatchQueue.main.async { [self] in
+            guard wanted != (mouseMonitor != nil) else { return }
+            guard wanted else {
+                if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+                mouseMonitor = nil
+                return
+            }
+            // An optimisation, not the mechanism: the idle heartbeat covers anything this never
+            // sees, including events delivered to this process itself. Mouse-up is here because a
+            // click can change what is frontmost without the pointer travelling.
+            mouseMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+                           .leftMouseUp, .rightMouseUp, .otherMouseUp]
+            ) { [weak self] _ in
+                guard let self, let monitor = mouseMonitor else { return }
+                NSEvent.removeMonitor(monitor)
+                mouseMonitor = nil
+                queue.async { self.wakeLoop() }
+            }
+        }
     }
 
     private func wakeLoop() {
@@ -290,58 +310,6 @@ final class Agent {
         }
     }
 
-    private enum Shortcut: CaseIterable {
-        case toggle, focusNext, focusPrevious, focusWindow
-        case focusLeft, focusRight, focusUp, focusDown
-
-        var which: String {
-            switch self {
-            case .toggle: "toggles Heed"
-            case .focusNext: "moves focus to the next window"
-            case .focusPrevious: "moves focus to the previous window"
-            case .focusWindow: "moves focus to a window by number"
-            case .focusLeft, .focusRight, .focusUp, .focusDown:
-                "moves focus \(direction?.rawValue ?? "")"
-            }
-        }
-
-        var defaultsKey: String {
-            switch self {
-            case .toggle: "hotkey"
-            case .focusNext: "focusNextHotkey"
-            case .focusPrevious: "focusPreviousHotkey"
-            case .focusWindow: "focusWindowHotkey"
-            case .focusLeft: "focusLeftHotkey"
-            case .focusRight: "focusRightHotkey"
-            case .focusUp: "focusUpHotkey"
-            case .focusDown: "focusDownHotkey"
-            }
-        }
-
-        var keyPath: WritableKeyPath<Config, String> {
-            switch self {
-            case .toggle: \.hotkey
-            case .focusNext: \.focusNextHotkey
-            case .focusPrevious: \.focusPreviousHotkey
-            case .focusWindow: \.focusWindowHotkey
-            case .focusLeft: \.focusLeftHotkey
-            case .focusRight: \.focusRightHotkey
-            case .focusUp: \.focusUpHotkey
-            case .focusDown: \.focusDownHotkey
-            }
-        }
-
-        var direction: FocusDirection? {
-            switch self {
-            case .focusLeft: .left
-            case .focusRight: .right
-            case .focusUp: .up
-            case .focusDown: .down
-            default: nil
-            }
-        }
-    }
-
     /// The registrations one setting asks for: one for most shortcuts, nine for the numbered
     /// windows, whose setting names the combination for window 1. Nil when it names another key.
     private func combinations(for shortcut: Shortcut, _ spec: HotkeySpec) -> [(HotkeySpec, () -> Void)]? {
@@ -374,7 +342,6 @@ final class Agent {
         let under = sharedModifiers(of: texts, primary: Agent.toggleIndex)
         DispatchQueue.main.async { [self] in
             registrations = [:]
-            adopt(specs: [], under: [])
 
             let claimed = claim(texts)
             registrations = claimed.held
@@ -597,7 +564,7 @@ final class Agent {
         dispatchPrecondition(condition: .onQueue(.main))
 
         guard numbersEnabled,
-              numbersArmed(pressed: Agent.modifiers(from: flags), wanted: numberModifiers)
+              numbersArmed(pressed: HotkeySpec.Modifier.all(in: flags), wanted: numberModifiers)
         else {
             hideNumbers()
             return
@@ -612,6 +579,12 @@ final class Agent {
         }
         numbersArmWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + numbersDelay, execute: work)
+    }
+
+    /// Main thread only, like every caller: `NSEvent.modifierFlags` is a state snapshot.
+    private var numbersStillArmed: Bool {
+        numbersArmed(pressed: HotkeySpec.Modifier.all(in: NSEvent.modifierFlags),
+                     wanted: numberModifiers)
     }
 
     /// Counted by generation: building a ring is many cross-process calls, and the key can be let go
@@ -646,10 +619,7 @@ final class Agent {
                     hideNumbers()
                     return
                 }
-                guard let overlay = numberOverlay,
-                      numbersArmed(pressed: Agent.modifiers(from: NSEvent.modifierFlags),
-                                   wanted: numberModifiers)
-                else { return }
+                guard let overlay = numberOverlay, numbersStillArmed else { return }
                 overlay.show(badges)
                 watchTheModifier()
                 Log.debug("window numbers: showing 1 to \(badges.count)")
@@ -681,12 +651,12 @@ final class Agent {
         var depth: [Int: Int] = [:]
         for (index, window) in stack.enumerated() { depth[window.number] = index }
 
-        return zip(ring.ids, ring.windows).map { id, window in
-            // No depth means the window server no longer lists it; its own centre is the only
-            // answer left, and the show is about to be overtaken by the next build anyway.
-            guard let depth = depth[id] else { return CGPoint(x: window.frame.midX,
-                                                              y: window.frame.midY) }
-            return visibleCentre(of: window.frame, behind: frames[..<depth])
+        // Only the windows that get one: `visibleCentre` is a grid sweep per window, and
+        // `numberBadges` drops the rest.
+        return zip(ring.ids, ring.windows).prefix(NumberBadge.limit).map { id, window in
+            // No depth means the window server no longer lists it, so nothing is in front of it as
+            // far as this build can tell.
+            visibleCentre(of: window.frame, behind: frames[..<(depth[id] ?? 0)])
         }
     }
 
@@ -701,14 +671,9 @@ final class Agent {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            guard numbersArmed(pressed: Agent.modifiers(from: NSEvent.modifierFlags),
-                               wanted: numberModifiers)
-            else {
-                Log.debug("window numbers: the modifier went up unseen")
-                hideNumbers()
-                return
-            }
+            guard let self, !numbersStillArmed else { return }
+            Log.debug("window numbers: the modifier went up unseen")
+            hideNumbers()
         }
         timer.resume()
         numbersWatchdog = timer
@@ -739,10 +704,7 @@ final class Agent {
     /// uncovered, though, joins the ring and shifts every number after it.
     private func refreshNumbers() {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard numberOverlay?.isShowing == true,
-              numbersArmed(pressed: Agent.modifiers(from: NSEvent.modifierFlags),
-                           wanted: numberModifiers)
-        else { return }
+        guard numberOverlay?.isShowing == true, numbersStillArmed else { return }
         requestNumbers()
     }
 
@@ -753,16 +715,6 @@ final class Agent {
             Log.note(config.windowNumbers ? "window numbers on" : "window numbers off")
             syncMenuBar()
         }
-    }
-
-    private static func modifiers(from flags: NSEvent.ModifierFlags) -> Set<HotkeySpec.Modifier> {
-        let held = flags.intersection(.deviceIndependentFlagsMask)
-        var pressed: Set<HotkeySpec.Modifier> = []
-        if held.contains(.command) { pressed.insert(.command) }
-        if held.contains(.control) { pressed.insert(.control) }
-        if held.contains(.option) { pressed.insert(.option) }
-        if held.contains(.shift) { pressed.insert(.shift) }
-        return pressed
     }
 
     // MARK: - Main loop
@@ -1013,7 +965,7 @@ final class Agent {
             holdingFocus = false
         }
 
-        if config.entryMotionPx > 0, motion.total < Double(config.entryMotionPx) {
+        if config.entryMotionPx > 0, !pointerIsTravelling {
             guard let previous = lastResolved else {
                 lastResolved = target
                 Log.debug("baseline \(target.describedAs): not focusing without pointer movement")
@@ -1090,9 +1042,9 @@ final class Agent {
     /// Whether a hold could act on this tick at all: only the frontmost app's is ever consulted, so
     /// asking the window server about the pointer for any other is work nothing can use.
     private var holdingApplies: Bool {
-        guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
-            return false
-        }
+        guard handover.isHolding,
+              let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        else { return false }
         return front != ownPid && handover.isHolding(owner: front)
     }
 
@@ -1106,12 +1058,16 @@ final class Agent {
     }
 
     /// The window the window server has under the pointer, ignoring anything above the ordinary
-    /// level. Its number identifies the window the pointer is on when no hit test may run.
-    private func windowNumber(under point: CGPoint?) -> Int? {
-        guard let point else { return nil }
-        return onScreenWindows().first {
+    /// level.
+    private func listedWindow(under point: CGPoint) -> ListedWindow? {
+        onScreenWindows().first {
             $0.level == 0 && $0.pid != ownPid && $0.frame.contains(point)
-        }?.number
+        }
+    }
+
+    /// Identifies the window the pointer is on when no hit test may run.
+    private func windowNumber(under point: CGPoint?) -> Int? {
+        point.flatMap { listedWindow(under: $0) }?.number
     }
 
     /// Record the newly resolved window as the next comparison's baseline, except on the tick a hold
@@ -1252,9 +1208,7 @@ final class Agent {
 
     /// App-level target for windows with no usable Accessibility tree.
     private func appLevelFallback(at point: CGPoint) -> Target? {
-        guard let window = onScreenWindows().first(where: {
-            $0.level == 0 && $0.pid != ownPid && $0.frame.contains(point)
-        }) else { return nil }
+        guard let window = listedWindow(under: point) else { return nil }
         guard let app = eligibleApp(pid: window.pid) else { return nil }
 
         Log.debug("no AX tree at cursor; falling back to app level for \(app.describedAs)")
@@ -1271,8 +1225,8 @@ final class Agent {
         guard let app = NSRunningApplication(processIdentifier: pid),
               app.activationPolicy != .prohibited
         else { return nil }
-        if let bundle = app.bundleIdentifier, config.excludedBundleIDs.contains(bundle) {
-            Log.debug("skipped: excluded \(bundle)")
+        if isExcluded(app.bundleIdentifier) {
+            Log.debug("skipped: excluded \(app.bundleIdentifier ?? "?")")
             return nil
         }
         return app
@@ -1288,8 +1242,7 @@ final class Agent {
             isMinimized: axBool(window, kAXMinimizedAttribute) == true,
             size: size,
             title: title,
-            bundleID: bundleID,
-            canActivate: true
+            bundleID: bundleID
         )
     }
 
@@ -1359,13 +1312,13 @@ final class Agent {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else {
             return false
         }
-        guard let window = target.window else { return true }
+        guard target.window != nil else { return true }
 
         let app = appElement(for: target.pid)
         guard let focusedWindow = axElement(app, kAXFocusedWindowAttribute) else {
             return true
         }
-        if CFEqual(focusedWindow, window) { return true }
+        if sameWindow(focusedWindow, as: target) { return true }
 
         // Reported as focused so the machine settles instead of fighting a dialog or a prompt.
         let focusedSubrole = axString(focusedWindow, kAXSubroleAttribute)
@@ -1379,10 +1332,7 @@ final class Agent {
             return true
         }
 
-        // Electron: same window, different element. Anything unreadable counts as no match, which
-        // costs a redundant activate of an app that is already frontmost.
-        guard !target.frame.isNull, axFrame(focusedWindow) == target.frame else { return false }
-        return axString(focusedWindow, kAXTitleAttribute) == target.title
+        return false
     }
 
     private func noteFailure(pid: pid_t) {
@@ -1554,9 +1504,7 @@ final class Agent {
     private func stepFocus(by delta: Int) {
         moveFocus(delta > 0 ? "focus step forward" : "focus step back") { [self] ring, start in
             let windows = ring.windows
-            // The last step is honoured only while it can still describe the same gesture.
-            let recent = now - lastStepAt < 1 ? lastStep : nil
-            let from = self.source(in: windows, start: start, lastStep: recent)
+            let from = self.source(in: windows, start: start)
             if from == nil, start.unanswered {
                 self.refuse("focus step", start)
                 return nil
@@ -1575,8 +1523,7 @@ final class Agent {
             let windows = ring.windows
             // The same start as a ring step, so a held key advances and focus on something the ring
             // cannot name steps from where that app sits.
-            let recent = now - lastStepAt < 1 ? lastStep : nil
-            guard let source = self.source(in: windows, start: start, lastStep: recent) else {
+            guard let source = self.source(in: windows, start: start) else {
                 if start.unanswered {
                     self.refuse("focus \(direction.rawValue)", start)
                 } else {
@@ -1607,11 +1554,11 @@ final class Agent {
         }
     }
 
-    /// The ring entry a step starts from.
-    private func source(
-        in windows: [Target], start: Start, lastStep: (from: Target?, to: Target)?
-    ) -> Int? {
-        if let known = ringStart(in: windows, live: start.live, lastStep: lastStep)
+    /// The ring entry a step starts from. The last step is honoured only while it can still
+    /// describe the same gesture.
+    private func source(in windows: [Target], start: Start) -> Int? {
+        let recent = now - lastStepAt < 1 ? lastStep : nil
+        if let known = ringStart(in: windows, live: start.live, lastStep: recent)
             ?? start.front.flatMap({ pid in windows.firstIndex { $0.pid == pid } }) {
             return known
         }
@@ -1768,9 +1715,7 @@ final class Agent {
         }
 
         // Exact, unlike `framesAgree`: both sides are Accessibility's own report.
-        guard let frame = axFrame(focused) else { return nil }
-        let title = axString(focused, kAXTitleAttribute)
-        return ring.firstIndex { $0.pid == front && $0.frame == frame && $0.title == title }
+        return ring.firstIndex(of: windowTarget(focused, pid: front))
     }
 
     /// Whether the window server's rectangle and Accessibility's describe the same window. Tolerant
@@ -1871,18 +1816,6 @@ final class Agent {
                 if self.lastForeignFront == pid { self.lastForeignFront = nil }
                 if self.clickActivated == pid { self.clickActivated = nil }
             }
-        }
-
-        // An optimisation, not the mechanism: the idle heartbeat covers anything this never sees,
-        // including events delivered to this process itself. Mouse-up is here because a click can
-        // change what is frontmost without the pointer travelling.
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
-                       .leftMouseUp, .rightMouseUp, .otherMouseUp]
-        ) { [weak self] _ in
-            guard let self, wantsMouseWake else { return }
-            wantsMouseWake = false
-            queue.async { self.wakeLoop() }
         }
 
         // Unretained is safe: the agent lives for the life of the process.
@@ -2013,6 +1946,11 @@ final class Agent {
         let buttons = NSEvent.pressedMouseButtons
         print("  mouse buttons:      \(buttons == 0 ? "none" : "0b" + String(buttons, radix: 2))"
             + (buttons == 0 ? "" : "  <- SUPPRESSING"))
+        let sinceClick = secondsSinceAny(of: Agent.deliberateMouseEvents)
+        print(String(format: "  last click:         %.2fs ago (grace %dms)%@",
+                     sinceClick, config.clickGraceMs,
+                     config.clickGraceMs > 0 && sinceClick < config.clickGrace
+                         ? "  <- SUPPRESSING" : ""))
         let sinceKey = CGEventSource.secondsSinceLastEventType(
             .combinedSessionState, eventType: .keyDown
         )

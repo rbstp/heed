@@ -2,6 +2,10 @@ import CoreGraphics
 import Foundation
 
 public struct NumberBadge: Equatable, Sendable {
+    /// Windows past the ninth get none: the shortcuts stop at the digit keys, so there is nothing
+    /// left to press for them and a number nobody can type would only mislead.
+    public static let limit = 9
+
     public let number: Int
     public let centre: CGPoint
 
@@ -20,9 +24,7 @@ public func numbersArmed(
     return pressed == wanted
 }
 
-/// Windows past the ninth get none: the shortcuts stop at the digit keys, so there is nothing left
-/// to press for them and a number nobody can type would only mislead.
-public func numberBadges(at centres: [CGPoint], limit: Int = 9) -> [NumberBadge] {
+public func numberBadges(at centres: [CGPoint], limit: Int = NumberBadge.limit) -> [NumberBadge] {
     centres.prefix(max(limit, 0)).enumerated().map { index, centre in
         NumberBadge(number: index + 1, centre: centre)
     }
@@ -30,37 +32,11 @@ public func numberBadges(at centres: [CGPoint], limit: Int = 9) -> [NumberBadge]
 
 /// A badge at the plain centre lands on whatever is on top whenever a window is covered across its
 /// middle, and then it labels the wrong window: a maximised browser with a terminal parked over it
-/// keeps its edges showing, so it stays in the ring, but its centre is under the terminal. Placing
+/// keeps its edges showing, so it stays in the ring, but its centre is under the terminal.
 public func visibleCentre(of frame: CGRect, behind covering: some Sequence<CGRect>) -> CGPoint {
     let middle = CGPoint(x: frame.midX, y: frame.midY)
     guard frame.width > 0, frame.height > 0 else { return middle }
-
-    var columns: Set<CGFloat> = [frame.minX, frame.maxX]
-    var rows: Set<CGFloat> = [frame.minY, frame.maxY]
-    var covers: [CGRect] = []
-    for cover in covering {
-        let overlap = cover.intersection(frame)
-        guard !overlap.isNull, !overlap.isEmpty else { continue }
-        covers.append(overlap)
-        columns.insert(overlap.minX)
-        columns.insert(overlap.maxX)
-        rows.insert(overlap.minY)
-        rows.insert(overlap.maxY)
-    }
-    guard !covers.isEmpty else { return middle }
-
-    let x = columns.sorted()
-    let y = rows.sorted()
-    var covered = [[Bool]](repeating: [Bool](repeating: false, count: x.count - 1),
-                           count: y.count - 1)
-    for cover in covers {
-        for row in 0..<(y.count - 1) where y[row] >= cover.minY && y[row + 1] <= cover.maxY {
-            for column in 0..<(x.count - 1)
-            where x[column] >= cover.minX && x[column + 1] <= cover.maxX {
-                covered[row][column] = true
-            }
-        }
-    }
+    guard let (x, y, covered) = coverGrid(of: frame, behind: covering) else { return middle }
 
     var best: (area: CGFloat, rect: CGRect)?
     for left in 0..<(x.count - 1) {
@@ -69,17 +45,16 @@ public func visibleCentre(of frame: CGRect, behind covering: some Sequence<CGRec
             for row in 0..<(y.count - 1) where covered[row][right - 1] { blocked[row] = true }
             let width = x[right] - x[left]
 
+            // One index past the last cell closes the final run.
             var top = 0
             for row in 0...(y.count - 1) {
-                guard row < y.count - 1, !blocked[row] else {
-                    let height = y[row] - y[top]
-                    let area = width * height
-                    if height > 0, area > (best?.area ?? 0) {
-                        best = (area, CGRect(x: x[left], y: y[top], width: width, height: height))
-                    }
-                    top = row + 1
-                    continue
+                guard row == y.count - 1 || blocked[row] else { continue }
+                let height = y[row] - y[top]
+                let area = width * height
+                if height > 0, area > (best?.area ?? 0) {
+                    best = (area, CGRect(x: x[left], y: y[top], width: width, height: height))
                 }
+                top = row + 1
             }
         }
     }

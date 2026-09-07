@@ -14,7 +14,8 @@ final class NeedsTickTests: XCTestCase {
         under target: String? = "A"
     ) -> String? {
         machine.tick(now: now, condition: condition, cursorMoved: moved,
-                     hitTest: { target }, isAlreadyFocused: { _ in false })
+                     hitTest: { target }, isAlreadyFocused: { _ in false },
+                     confirm: { $0 })
     }
 
     func testQuietWhenNothingHasHappened() {
@@ -64,5 +65,13 @@ final class NeedsTickTests: XCTestCase {
         var m = machine(dwell: 0)
         XCTAssertEqual(tick(&m, moved: true), "A")
         XCTAssertFalse(m.needsTick)
+    }
+
+    func testBusyAfterARefusedConfirmation() {
+        var m = machine(dwell: 0)
+        _ = m.tick(now: 100, condition: .normal, cursorMoved: true,
+                   hitTest: { "A" }, isAlreadyFocused: { _ in false }, confirm: { _ in nil })
+        m.invalidate()
+        XCTAssertTrue(m.needsTick)
     }
 }

@@ -4,6 +4,34 @@ import Carbon
 import CoreGraphics
 import Foundation
 import HeedCore
+import os
+
+/// Lets `verifyFocus` sleep until the app it is waiting for actually comes forward. Guarded by its
+/// own lock rather than the agent queue: `verifyFocus` blocks that queue, so a signal posted there
+/// would queue up behind the very wait it is meant to release.
+private final class ActivationWait {
+    private let state =
+        OSAllocatedUnfairLock<(pid: pid_t, semaphore: DispatchSemaphore)?>(initialState: nil)
+
+    func arm(_ pid: pid_t) -> DispatchSemaphore {
+        let semaphore = DispatchSemaphore(value: 0)
+        state.withLock { $0 = (pid, semaphore) }
+        return semaphore
+    }
+
+    func disarm() {
+        state.withLock { $0 = nil }
+    }
+
+    func note(_ pid: pid_t) {
+        let waiting = state.withLock { standing -> DispatchSemaphore? in
+            guard let current = standing, current.pid == pid else { return nil }
+            standing = nil
+            return current.semaphore
+        }
+        waiting?.signal()
+    }
+}
 
 final class Agent {
     private let systemWide = AXUIElementCreateSystemWide()
@@ -14,6 +42,7 @@ final class Agent {
     private var machine: DwellMachine<Target>
     private var timer: DispatchSourceTimer?
     private var hangupSource: DispatchSourceSignal?
+    private let activationWait = ActivationWait()
 
     // Main thread only; `syncMenuBar` and `syncHotkey` are the hops from `queue`.
     private var menuBar: MenuBarController?
@@ -46,7 +75,7 @@ final class Agent {
     private var pendingInvalidation = false
 
     private var motion = MotionTracker(capacity: 5)
-    private var lastResolved: Target?
+    private var entry = EntryGuard<Target>()
     /// The last window under the pointer, whether or not it was allowed to take focus.
     private var lastPointerWindow: Target?
     /// False after a reset until a hit test has run: nil then means unknown, not "over nothing".
@@ -193,12 +222,12 @@ final class Agent {
     }
 
     /// Forget what the pointer was over, so the next tick adopts a baseline instead of acting on it.
-    /// `machine.invalidate()` alone would let a stale `lastResolved` pass the entry guard and drag
+    /// `machine.invalidate()` alone would let a stale entry baseline pass the guard and drag
     /// focus back to a window under a pointer that never moved.
     private func forgetTarget() {
         machine.invalidate()
         motion.reset()
-        lastResolved = nil
+        entry.reset()
         lastPointerWindow = nil
         pointerWindowKnown = false
         handover.reset()
@@ -764,28 +793,32 @@ final class Agent {
         let condition = currentCondition(cursorMoved: moved)
         if condition == .invalidating {
             motion.reset()
-            lastResolved = nil
+            entry.reset()
         }
 
-        let target = machine.tick(
+        // No closure here may touch `machine`: a nested access traps at runtime. The confirming
+        // re-read runs only for a candidate that matured across ticks, where the window really can
+        // have closed, minimized or moved while it aged.
+        let confirmed = machine.tick(
             now: now,
             condition: condition,
             cursorMoved: moved,
             hitTest: { self.hitTestForFocus(at: cursor) },
-            isAlreadyFocused: { self.focusMatches($0) }
+            isAlreadyFocused: { self.focusMatches($0, front: self.frontmostApp()) },
+            confirm: { candidate in
+                guard let found = self.hitTest(at: cursor), found == candidate else {
+                    Log.debug("target changed before it could be focused; "
+                        + "discarding \(candidate.describedAs)")
+                    return nil
+                }
+                return found
+            }
         )
 
         defer { retime(to: hasPendingWork(cursorMoved: moved) ? config.poll : config.idlePoll,
                        startingNow: false) }
 
-        guard let target else { return }
-
-        // Time passes regardless of dwell: the window can close, minimize or move during the reads.
-        guard let confirmed = hitTest(at: cursor), confirmed == target else {
-            Log.debug("target changed before it could be focused; discarding \(target.describedAs)")
-            machine.invalidate()
-            return
-        }
+        guard let confirmed else { return }
 
         // Stealing focus would raise another window over the prompt, and a buried prompt can never
         // be reached by pointer again.
@@ -813,6 +846,27 @@ final class Agent {
 
     // MARK: - Guards
 
+    /// Every guard that can suppress a tick, in the order they are tested: cheapest first, the
+    /// window server round trip last. `probe` prints this same list, so a guard added here cannot
+    /// go missing from the diagnostics.
+    private enum Guard: CaseIterable {
+        case mouseButtons, clickGrace, typing, secureInput, commandHeld, overlay
+
+        var label: String {
+            switch self {
+            case .mouseButtons: "mouse buttons"
+            case .clickGrace: "last click"
+            case .typing: "last keystroke"
+            case .secureInput: "secure input"
+            case .commandHeld: "command held"
+            case .overlay: "overlay on screen"
+            }
+        }
+    }
+
+    /// `allCases` rebuilds its array on every access, and this one is walked 25 times a second.
+    private static let guards = Guard.allCases
+
     private func currentCondition(cursorMoved: Bool) -> TickCondition {
         if pendingInvalidation {
             pendingInvalidation = false
@@ -821,36 +875,46 @@ final class Agent {
         }
 
         // A window is about to be picked by number; moving focus under the pointer first would
-        // both fight the keystroke and renumber what the user is reading.
+        // both fight the keystroke and renumber what the user is reading. Not a `Guard`: a second
+        // process, which is what `probe` is, can never have the numbers up.
         if numbersShowing { return .suppressing }
 
+        let pending = cursorMoved || machine.needsTick
+        return Agent.guards.contains { holds($0, pending: pending) } ? .suppressing : .normal
+    }
+
+    /// `pending` is whether this tick has anything to act on, which is what makes the overlay worth
+    /// a round trip. `probe` passes true: it reports what is true now, not what a tick would skip.
+    private func holds(_ rule: Guard, pending: Bool) -> Bool {
+        switch rule {
         // An instantaneous snapshot; the grace period covers presses it cannot see.
-        if NSEvent.pressedMouseButtons != 0 { return .suppressing }
-
-        if config.clickGraceMs > 0, secondsSinceAny(of: Agent.deliberateMouseEvents) < config.clickGrace {
-            return .suppressing
-        }
-
-        if config.typingCooldownMs > 0,
-           CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
-            < config.typingCooldown {
-            return .suppressing
-        }
-
-        if IsSecureEventInputEnabled() { return .suppressing }
-
-        if config.ignoreWhenCommandHeld,
-           CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand) {
-            return .suppressing
-        }
-
+        case .mouseButtons: NSEvent.pressedMouseButtons != 0
+        case .clickGrace: config.clickGraceMs > 0 && secondsSinceClick < config.clickGrace
+        case .typing: config.typingCooldownMs > 0 && secondsSinceKeystroke < config.typingCooldown
+        case .secureInput: IsSecureEventInputEnabled()
+        case .commandHeld:
+            config.ignoreWhenCommandHeld
+                && CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand)
         // Only worth a round trip while something is pending, including a hit test armed by the
         // previous tick.
-        if config.menuGuard, cursorMoved || machine.needsTick, overlayPresent() {
-            return .suppressing
+        case .overlay: config.menuGuard && pending && overlayPresent()
         }
+    }
 
-        return .normal
+    /// What `probe` shows beside a guard that reads as more than a yes or a no.
+    private func reading(_ rule: Guard) -> String? {
+        switch rule {
+        case .mouseButtons:
+            let buttons = NSEvent.pressedMouseButtons
+            return buttons == 0 ? "none" : "0b" + String(buttons, radix: 2)
+        case .clickGrace:
+            return String(format: "%.2fs ago (grace %dms)", secondsSinceClick, config.clickGraceMs)
+        case .typing:
+            return String(format: "%.2fs ago (cooldown %dms)",
+                          secondsSinceKeystroke, config.typingCooldownMs)
+        case .secureInput, .commandHeld, .overlay:
+            return nil
+        }
     }
 
     /// Releases as well as presses, so the grace after a drag starts at the drop.
@@ -868,6 +932,12 @@ final class Agent {
         types.reduce(Double.greatestFiniteMagnitude) { earliest, type in
             min(earliest, CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: type))
         }
+    }
+
+    private var secondsSinceClick: Double { secondsSinceAny(of: Agent.deliberateMouseEvents) }
+
+    private var secondsSinceKeystroke: Double {
+        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
     }
 
     /// Whether a menu, popover or drag image is on screen, judged by window level: while a menu is
@@ -946,55 +1016,52 @@ final class Agent {
             return nil
         }
         adoptPointerWindow(target)
-        noteMovingPointerBaseline(window: target)
+        let front = config.handoverGuard ? frontmostApp() : nil
+        noteMovingPointerBaseline(window: target, front: front)
 
-        switch handoverDecision(for: target) {
+        switch handoverDecision(for: target, front: front) {
         case .hold:
             if !holdingFocus {
                 holdingFocus = true
                 Log.debug("not focusing \(target.describedAs): focus was handed to "
-                    + "\(frontmostName()) and the pointer has not settled anywhere else since")
+                    + "\(frontmostName(front)) and the pointer has not settled anywhere else since")
             }
             return nil
         case .entered:
             holdingFocus = false
             Log.debug("settled on \(target.describedAs); following the pointer again")
-            lastResolved = target
+            // Adopted rather than admitted: the travel that earned the handover has already aged
+            // out of the motion tracker by the time it settles.
+            entry.adopt(target)
             return target
         case .free:
             holdingFocus = false
         }
 
-        if config.entryMotionPx > 0, !pointerIsTravelling {
-            guard let previous = lastResolved else {
-                lastResolved = target
-                Log.debug("baseline \(target.describedAs): not focusing without pointer movement")
-                return nil
-            }
-            if previous != target {
-                // The baseline is deliberately not updated, or the next tick would accept it.
-                Log.debug("ignoring \(target.describedAs): it arrived under a near-stationary "
-                    + "pointer (\(Int(motion.total.rounded()))px of recent travel)")
-                return nil
-            }
+        switch entry.admit(target, travelled: motion.total,
+                           threshold: Double(config.entryMotionPx)) {
+        case .admitted:
+            return target
+        case .baseline:
+            Log.debug("baseline \(target.describedAs): not focusing without pointer movement")
+            return nil
+        case .blocked:
+            Log.debug("ignoring \(target.describedAs): it arrived under a near-stationary "
+                + "pointer (\(Int(motion.total.rounded()))px of recent travel)")
+            return nil
         }
-
-        lastResolved = target
-        return target
     }
 
-    private func handoverDecision(for target: Target) -> HandoverDecision {
-        guard config.handoverGuard, handover.isHolding,
-              let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              front != ownPid
-        else { return .free }
+    private func handoverDecision(for target: Target, front: NSRunningApplication?)
+        -> HandoverDecision {
+        guard config.handoverGuard, handover.isHolding, let front else { return .free }
         return handover.decide(
-            for: target, frontmost: front, pointer: pointerLocation,
+            for: target, frontmost: front.processIdentifier, pointer: pointerLocation,
             pointerMoved: pointerMovedThisTick, travelling: pointerIsTravelling, at: now
         )
     }
 
-    /// The entry guard's own test, except at threshold 0 where any travel at all stands in for it.
+    /// What the handover means by travel: the entry guard's threshold, or at 0 any travel at all.
     private var pointerIsTravelling: Bool {
         config.entryMotionPx > 0
             ? motion.total >= Double(config.entryMotionPx)
@@ -1007,25 +1074,27 @@ final class Agent {
     @discardableResult
     private func noteHandover() -> CGPoint? {
         handoverNotedThisTick = false
-        guard config.handoverGuard, pointerWindowKnown, sampleHandover() else { return nil }
+        guard config.handoverGuard, pointerWindowKnown else { return nil }
+        let front = frontmostApp()
+        guard sampleHandover(front: front) else { return nil }
         handoverNotedThisTick = true
 
-        Log.debug("focus was handed to \(frontmostName()); it keeps it until the pointer settles "
-            + "somewhere else")
-        let warped = warpAfterHandover()
+        Log.debug("focus was handed to \(frontmostName(front)); it keeps it until the pointer "
+            + "settles somewhere else")
+        let warped = warpAfterHandover(front: front)
         // A dwell candidate formed before this must not land: the pre-apply revalidation uses the
         // raw hit test, which knows nothing about holds.
         machine.invalidate()
         return warped
     }
 
-    private func sampleHandover() -> Bool {
+    private func sampleHandover(front: NSRunningApplication?) -> Bool {
         let window = lastPointerWindow
-        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         return handover.sample(
-            window: window, hasFocus: window.map { focusMatches($0) }, anchor: anchor(for: window),
+            window: window, hasFocus: window.map { focusMatches($0, front: front) },
+            anchor: anchor(for: window),
             number: windowNumber(under: pointerLocation), pointer: pointerLocation,
-            owner: front == ownPid ? nil : front, pointerMoved: false
+            owner: front?.processIdentifier, pointerMoved: false
         )
     }
 
@@ -1036,16 +1105,16 @@ final class Agent {
         lastPointerWindow = target
         guard !pointerWindowKnown else { return }
         pointerWindowKnown = true
-        if config.handoverGuard { _ = sampleHandover() }
+        // Its own reading: this fires on the first observation after a reset, reached from a warp,
+        // a shortcut and startup as well as from a tick, so it is a different moment.
+        if config.handoverGuard { _ = sampleHandover(front: frontmostApp()) }
     }
 
     /// Whether a hold could act on this tick at all: only the frontmost app's is ever consulted, so
     /// asking the window server about the pointer for any other is work nothing can use.
     private var holdingApplies: Bool {
-        guard handover.isHolding,
-              let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        else { return false }
-        return front != ownPid && handover.isHolding(owner: front)
+        guard handover.isHolding, let front = frontmostApp() else { return false }
+        return handover.isHolding(owner: front.processIdentifier)
     }
 
     /// The pointer as a hold should record it. Nil until a tick has read it: a position that is not
@@ -1072,20 +1141,29 @@ final class Agent {
 
     /// Record the newly resolved window as the next comparison's baseline, except on the tick a hold
     /// was just discovered: that hold has to judge the movement rather than be overwritten by it.
-    private func noteMovingPointerBaseline(window: Target?) {
-        guard config.handoverGuard, pointerMovedThisTick, !handoverNotedThisTick,
-              let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              front != ownPid
+    private func noteMovingPointerBaseline(window: Target?, front: NSRunningApplication?) {
+        guard config.handoverGuard, pointerMovedThisTick, !handoverNotedThisTick, let front
         else { return }
 
         handover.sample(
             window: window, hasFocus: nil, anchor: anchor(for: window),
-            number: nil, pointer: pointerLocation, owner: front, pointerMoved: true
+            number: nil, pointer: pointerLocation, owner: front.processIdentifier,
+            pointerMoved: true
         )
     }
 
-    private func frontmostName() -> String {
-        NSWorkspace.shared.frontmostApplication?.describedAs ?? "another app"
+    /// The frontmost app, or nil when that is Heed: every caller treats "we are in front" the same
+    /// as "nobody is". Read once per decision, because the AX round trips between two reads can
+    /// take long enough for them to name different apps.
+    private func frontmostApp() -> NSRunningApplication? {
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != ownPid
+        else { return nil }
+        return front
+    }
+
+    private func frontmostName(_ front: NSRunningApplication?) -> String {
+        front?.describedAs ?? "another app"
     }
 
     private func hitTest(at point: CGPoint) -> Target? {
@@ -1291,27 +1369,33 @@ final class Agent {
     /// Wait for the app to become frontmost. NSWorkspace rather than `AXFocusedApplication`, which
     /// returns nothing when the focused app has no usable AX tree. The budget blocks `queue`, so it
     /// is tight; a failure retries on the next tick.
+    ///
+    /// The activation notification only wakes the wait early. NSWorkspace stays the answer, re-read
+    /// every time round, so a notification that is late, lost or beaten by the read costs nothing
+    /// worse than the 10ms backstop.
     private func verifyFocus(_ target: Target) -> Bool {
         let started = now
+        let arrived = activationWait.arm(target.pid)
+        defer { activationWait.disarm() }
+
         while true {
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid {
                 Log.debug("focused \(target.describedAs) in \(Int((now - started) * 1000))ms")
                 return true
             }
-            if now - started >= config.verifyTimeout {
+            let left = config.verifyTimeout - (now - started)
+            if left <= 0 {
                 let holder = NSWorkspace.shared.frontmostApplication?.localizedName ?? "nothing"
                 Log.debug("verify timed out after \(config.verifyTimeoutMs)ms: "
                     + "focus is on \(holder), wanted \(target.describedAs)")
                 return false
             }
-            usleep(10_000)
+            _ = arrived.wait(timeout: .now() + min(left, 0.01))
         }
     }
 
-    private func focusMatches(_ target: Target) -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else {
-            return false
-        }
+    private func focusMatches(_ target: Target, front: NSRunningApplication?) -> Bool {
+        guard front?.processIdentifier == target.pid else { return false }
         guard target.window != nil else { return true }
 
         let app = appElement(for: target.pid)
@@ -1388,11 +1472,8 @@ final class Agent {
     /// Follow focus that arrived without the pointer: Cmd-Tab, an app activating, a window picked
     /// from Raycast. The hold this tick just declared is re-declared around the new position, so
     /// the pointer has to leave the window it was put in before focus can move again.
-    private func warpAfterHandover() -> CGPoint? {
-        guard config.warpPointer,
-              let front = NSWorkspace.shared.frontmostApplication,
-              front.processIdentifier != ownPid
-        else { return nil }
+    private func warpAfterHandover(front: NSRunningApplication?) -> CGPoint? {
+        guard config.warpPointer, let front else { return nil }
 
         // Never out of a drag, and never off a click: this is for focus the keyboard moved. The two
         // click tests cover each other: the sampled one is right however late the loop gets here,
@@ -1792,6 +1873,8 @@ final class Agent {
                   app.processIdentifier != ownPid
             else { return }
             let pid = app.processIdentifier
+            // Before the hop, never inside it: `verifyFocus` is blocking `queue` right now.
+            activationWait.note(pid)
             let bundleID = app.bundleIdentifier
             let byClick = secondsSinceAny(of: Agent.deliberateMouseEvents) < Agent.warpClickGrace
             queue.async {
@@ -1943,24 +2026,12 @@ final class Agent {
         print("accessibility:        \(accessibilityTrusted(prompt: false) ? "trusted" : "NOT TRUSTED")")
 
         print("\nguards")
-        let buttons = NSEvent.pressedMouseButtons
-        print("  mouse buttons:      \(buttons == 0 ? "none" : "0b" + String(buttons, radix: 2))"
-            + (buttons == 0 ? "" : "  <- SUPPRESSING"))
-        let sinceClick = secondsSinceAny(of: Agent.deliberateMouseEvents)
-        print(String(format: "  last click:         %.2fs ago (grace %dms)%@",
-                     sinceClick, config.clickGraceMs,
-                     config.clickGraceMs > 0 && sinceClick < config.clickGrace
-                         ? "  <- SUPPRESSING" : ""))
-        let sinceKey = CGEventSource.secondsSinceLastEventType(
-            .combinedSessionState, eventType: .keyDown
-        )
-        print(String(format: "  last keystroke:     %.2fs ago (cooldown %dms)%@",
-                     sinceKey, config.typingCooldownMs,
-                     sinceKey < config.typingCooldown ? "  <- SUPPRESSING" : ""))
-        print("  secure input:       \(IsSecureEventInputEnabled() ? "yes  <- SUPPRESSING" : "no")")
-        let command = CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand)
-        print("  command held:       \(command && config.ignoreWhenCommandHeld ? "yes  <- SUPPRESSING" : "no")")
-        print("  overlay on screen:  \(config.menuGuard && overlayPresent() ? "yes  <- SUPPRESSING" : "no")")
+        for rule in Agent.guards {
+            let holding = holds(rule, pending: true)
+            print("  " + (rule.label + ":").padding(toLength: 20, withPad: " ", startingAt: 0)
+                + (reading(rule) ?? (holding ? "yes" : "no"))
+                + (holding ? "  <- SUPPRESSING" : ""))
+        }
         let promptHolds = config.promptGuard && frontmostPromptAwaitsAnswer()
         print("  prompt mid-question:\(promptHolds ? " yes  <- HOLDING ALL FOCUS" : " no")")
         // A hold belongs to the running agent's history, which this process does not have.
@@ -2005,7 +2076,7 @@ final class Agent {
             print("  target:             \(target.describedAs) (pid \(target.pid))")
             print("  bundle:             \(target.bundleID ?? "-")")
             print("  granularity:        \(target.window != nil ? "window" : "app only (no AX tree)")")
-            print("  already focused:    \(focusMatches(target))")
+            print("  already focused:    \(focusMatches(target, front: frontmostApp()))")
         } else {
             print("  target:             none -- see the guards above, or the role/size checks")
         }

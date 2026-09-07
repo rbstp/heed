@@ -2,9 +2,10 @@
 
 Move keyboard focus between windows from Raycast, and turn focus follows mouse on and off.
 
-[Heed](https://github.com/rbstp/heed) is a focus-follows-mouse agent for macOS. It registers its
-own global hotkeys, and every combination it claims is gone from every other app. This extension is
-the way to get those combinations back: Raycast owns the hotkey, Heed claims nothing.
+[Heed](https://github.com/rbstp/heed) is a window focus agent for macOS, inspired by Hyprland:
+`movefocus` for stepping between windows, `follow_mouse` for the pointer. It registers its own
+global hotkeys, and every combination it claims is gone from every other app. This extension is the
+way to get those combinations back: Raycast owns the hotkey, Heed claims nothing.
 
 ## Commands
 

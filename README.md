@@ -1,6 +1,7 @@
 # Heed
 
-**Focus follows mouse for macOS, inspired by Hyprland's `follow_mouse`.**
+**Focus follows mouse and directional focus for macOS, inspired by Hyprland's `follow_mouse` and
+`movefocus`.**
 
 [![CI](https://github.com/rbstp/heed/actions/workflows/ci.yml/badge.svg)](https://github.com/rbstp/heed/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rbstp/heed?logo=github)](https://github.com/rbstp/heed/releases/latest)

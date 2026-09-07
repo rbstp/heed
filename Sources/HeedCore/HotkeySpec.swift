@@ -1,7 +1,7 @@
 import Foundation
 
 /// A key combination parsed from the string a user types into `defaults write`.
-public struct HotkeySpec: Equatable, Sendable {
+public struct HotkeySpec: Hashable, Sendable {
     /// Declared in the order macOS displays them: ⌃⌥⇧⌘.
     public enum Modifier: String, Sendable, CaseIterable {
         case control, option, shift, command
@@ -134,6 +134,42 @@ public struct HotkeySpec: Equatable, Sendable {
 extension Set where Element == HotkeySpec.Modifier {
     var ordered: [HotkeySpec.Modifier] { HotkeySpec.Modifier.allCases.filter(contains) }
     var symbols: String { ordered.map(\.symbol).joined() }
+}
+
+/// The first two claims on the same combination. Whichever is registered second is refused, and
+/// the refusal reads as another app holding it when the other holder is us.
+public func firstClash<Name>(
+    in claims: [(name: Name, spec: HotkeySpec)]
+) -> (earlier: Name, later: Name, spec: HotkeySpec)? {
+    var seen: [HotkeySpec: Name] = [:]
+    for claim in claims {
+        if let earlier = seen[claim.spec] { return (earlier, claim.name, claim.spec) }
+        seen[claim.spec] = claim.name
+    }
+    return nil
+}
+
+/// The modifier a set of settings counts as being under: `primary`'s, or the first that parses.
+/// What the menu ticks, and what it replaces.
+public func sharedModifiers(of texts: [String], primary: Int = 0) -> Set<HotkeySpec.Modifier> {
+    let specs = texts.enumerated().compactMap { index, text in
+        HotkeySpec(text).map { (index, $0) }
+    }
+    return (specs.first { $0.0 == primary } ?? specs.first)?.1.modifiers ?? []
+}
+
+/// Move the settings under `base` onto `modifiers`, keeping each key, and leave the rest alone.
+///
+/// A setting deliberately given a different combination -- the directional shortcuts carry an extra
+/// Option -- must keep it: flattening everything onto one modifier puts two settings on the same
+/// combination as soon as any two share a key, which can never be registered.
+public func rewriteHotkeys(
+    _ texts: [String], under base: Set<HotkeySpec.Modifier>, to modifiers: Set<HotkeySpec.Modifier>
+) -> [String] {
+    texts.map { text in
+        guard HotkeySpec(text)?.modifiers == base else { return text }
+        return rewriteHotkey(text, modifiers: modifiers)
+    }
 }
 
 /// Rewrite a hotkey setting under different modifiers, keeping its key. A setting that is off or

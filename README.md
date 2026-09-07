@@ -55,12 +55,16 @@ Other targets: `make restart`, `make logs`, `make uninstall`.
   Off by default, because each shortcut Heed registers is taken away from every other app:
 
   ```sh
-  defaults write io.github.rbstp.heed focusLeftHotkey 'cmd+ctrl+alt+h'
-  defaults write io.github.rbstp.heed focusDownHotkey 'cmd+ctrl+alt+j'
-  defaults write io.github.rbstp.heed focusUpHotkey 'cmd+ctrl+alt+k'
-  defaults write io.github.rbstp.heed focusRightHotkey 'cmd+ctrl+alt+l'
+  defaults write io.github.rbstp.heed focusLeftHotkey 'cmd+ctrl+alt+a'
+  defaults write io.github.rbstp.heed focusDownHotkey 'cmd+ctrl+alt+s'
+  defaults write io.github.rbstp.heed focusUpHotkey 'cmd+ctrl+alt+w'
+  defaults write io.github.rbstp.heed focusRightHotkey 'cmd+ctrl+alt+d'
   make restart
   ```
+
+  WASD rather than HJKL because the toggle is already H: two shortcuts on the same key can be told
+  apart by their modifiers, but then **Shortcut Modifier** cannot put both under one modifier, and
+  it refuses the whole change rather than half applying it.
 
   A window sharing a row or column with the focused one wins over a closer one that does not, and
   the edge of the arrangement is a dead end rather than a wrap. Pair it with a tiling shortcut:

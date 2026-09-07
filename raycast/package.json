@@ -65,56 +65,10 @@
     },
     {
       "name": "focus-window",
-      "title": "Focus Window by Number",
+      "title": "Focus Window",
       "subtitle": "Heed",
-      "description": "Move keyboard focus to a window by its number in Heed's spatial order.",
-      "mode": "no-view",
-      "arguments": [
-        {
-          "name": "number",
-          "type": "dropdown",
-          "placeholder": "Window",
-          "required": true,
-          "data": [
-            {
-              "title": "Window 1",
-              "value": "1"
-            },
-            {
-              "title": "Window 2",
-              "value": "2"
-            },
-            {
-              "title": "Window 3",
-              "value": "3"
-            },
-            {
-              "title": "Window 4",
-              "value": "4"
-            },
-            {
-              "title": "Window 5",
-              "value": "5"
-            },
-            {
-              "title": "Window 6",
-              "value": "6"
-            },
-            {
-              "title": "Window 7",
-              "value": "7"
-            },
-            {
-              "title": "Window 8",
-              "value": "8"
-            },
-            {
-              "title": "Window 9",
-              "value": "9"
-            }
-          ]
-        }
-      ]
+      "description": "Every visible window by name, in Heed's spatial order. Pick one to focus it.",
+      "mode": "view"
     },
     {
       "name": "toggle",

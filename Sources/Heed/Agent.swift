@@ -228,6 +228,7 @@ final class Agent {
         case .disable: setEnabled(false)
         case .focusStep(let delta): stepFocus(by: delta)
         case .focusNumber(let number): focusWindow(number)
+        case .focusWindowID(let id): focusWindow(id: id)
         case .focusDirection(let direction): focusDirection(direction)
         }
     }
@@ -1164,18 +1165,36 @@ final class Agent {
 
     /// Move keyboard focus around the ring of visible windows. Runs whether or not Heed is
     /// switched on: `enabled` is about the mouse. `choose` picks the ring index to land on.
-    private func moveFocus(_ what: String, choose: @escaping (Ring, _ live: Int?, _ front: pid_t?) -> Int?) {
+    private func moveFocus(
+        _ what: String, choose: @escaping (Ring, _ from: Start) -> Int?
+    ) {
         queue.async { [self] in
             guard accessibilityTrusted(prompt: false) else {
                 Log.note("\(what): no Accessibility permission yet")
                 return
             }
 
+            // Read before the ring is built, which is many cross-process calls: movement during
+            // those must not decide what the shortcut acts on, nor release the hold it declares.
+            let cursor = CGEvent(source: nil)?.location ?? pointerLocation
+
             guard let ring = focusRing() else { return }
             let windows = ring.windows
             let front = frontmostForFocus()
             let live = liveFocusIndex(in: windows, frontmost: front)
-            guard let index = choose(ring, live, front) else { return }
+
+            // Written back so `noteHandover` samples the same window; a hit test that could not
+            // answer leaves the last answer standing, since "over nothing" is a claim only an
+            // answered one can make.
+            let under = cursor.flatMap { hitTest(at: $0) }
+            if hitTestAnswered { adoptPointerWindow(under) }
+
+            let start = Start(
+                live: live, front: front,
+                pointer: under.flatMap { windows.firstIndex(of: $0) },
+                unanswered: front.map { ring.unanswered.contains($0) } ?? false
+            )
+            guard let index = choose(ring, start) else { return }
 
             // Building the ring is many cross-process calls; a window can go away during them.
             let target = windows[index]
@@ -1190,13 +1209,6 @@ final class Agent {
             Log.debug("\(what) to \(target.describedAs) -- \(target.title ?? "untitled") "
                 + "(\(index + 1) of \(windows.count))")
 
-            // Where the pointer is now, not as of the last tick: movement before the keystroke must
-            // not release the hold this declares. Written back so `noteHandover` samples the same
-            // window; a hit test that could not answer leaves the last answer standing, since "over
-            // nothing" is a claim only an answered one can make.
-            let cursor = CGEvent(source: nil)?.location ?? pointerLocation
-            let under = cursor.flatMap { hitTest(at: $0) }
-            if hitTestAnswered { adoptPointerWindow(under) }
             // Before the focus is applied: raising the target can put it under the pointer.
             let number = cursor.flatMap { windowNumber(under: $0) }
 
@@ -1228,19 +1240,13 @@ final class Agent {
     }
 
     private func stepFocus(by delta: Int) {
-        moveFocus(delta > 0 ? "focus step forward" : "focus step back") { [self] ring, live, front in
+        moveFocus(delta > 0 ? "focus step forward" : "focus step back") { [self] ring, start in
             let windows = ring.windows
             // The last step is honoured only while it can still describe the same gesture.
             let recent = now - lastStepAt < 1 ? lastStep : nil
-            // Focus on something the ring cannot name steps on from where that app sits.
-            let from = ringStart(in: windows, live: live, lastStep: recent)
-                ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
-
-            // Starting from the first window is a fair guess for an app with nothing in the ring,
-            // not for one that failed to answer.
-            if from == nil, let front, ring.unanswered.contains(front) {
-                let name = NSRunningApplication(processIdentifier: front)?.describedAs ?? "pid \(front)"
-                Log.note("focus step: \(name) did not answer, so there is no telling where to step from")
+            let from = self.source(in: windows, start: start, lastStep: recent)
+            if from == nil, start.unanswered {
+                self.refuse("focus step", start)
                 return nil
             }
 
@@ -1254,16 +1260,17 @@ final class Agent {
 
     /// Focus the nearest window in a direction, starting from the one that has focus.
     private func focusDirection(_ direction: FocusDirection) {
-        moveFocus("focus \(direction.rawValue)") { [self] ring, live, front in
+        moveFocus("focus \(direction.rawValue)") { [self] ring, start in
             let windows = ring.windows
             // The same start as a ring step, so a held key advances and focus on something the ring
             // cannot name steps from where that app sits.
             let recent = now - lastStepAt < 1 ? lastStep : nil
-            let source = ringStart(in: windows, live: live, lastStep: recent)
-                ?? front.flatMap { pid in windows.firstIndex { $0.pid == pid } }
-            guard let source else {
-                Log.debug("focus \(direction.rawValue): focus is on nothing the ring can name, "
-                    + "so there is no telling where to step from")
+            guard let source = self.source(in: windows, start: start, lastStep: recent) else {
+                if start.unanswered {
+                    self.refuse("focus \(direction.rawValue)", start)
+                } else {
+                    Log.debug("focus \(direction.rawValue): nothing on screen to step from")
+                }
                 return nil
             }
 
@@ -1280,7 +1287,7 @@ final class Agent {
 
     /// Focus the window with this number in ring order, the way Hyprland switches workspaces.
     private func focusWindow(_ number: Int) {
-        moveFocus("focus window \(number)") { ring, _, _ in
+        moveFocus("focus window \(number)") { ring, _ in
             guard ring.windows.indices.contains(number - 1) else {
                 Log.note("focus window \(number): only \(ring.windows.count) windows on screen")
                 return nil
@@ -1289,9 +1296,53 @@ final class Agent {
         }
     }
 
+    /// The ring entry a step starts from.
+    private func source(
+        in windows: [Target], start: Start, lastStep: (from: Target?, to: Target)?
+    ) -> Int? {
+        if let known = ringStart(in: windows, live: start.live, lastStep: lastStep)
+            ?? start.front.flatMap({ pid in windows.firstIndex { $0.pid == pid } }) {
+            return known
+        }
+        // The pointer answers for a front that has no windows, never for one that stayed silent.
+        return start.unanswered ? nil : start.pointer
+    }
+
+    /// An app that did not answer is not an app with no windows. Neither the pointer nor the first
+    /// entry may stand in for it: either would take focus off a window the ring never saw.
+    private func refuse(_ what: String, _ start: Start) {
+        let name = start.front.flatMap { NSRunningApplication(processIdentifier: $0)?.describedAs }
+        Log.note("\(what): \(name ?? "the frontmost app") did not answer, so there is no telling "
+            + "where to step from")
+    }
+
+    /// Where a focus shortcut may start from, best answer first. The pointer is the one that saves a
+    /// cold start, where Heed was launched by the command it is answering and has seen nothing yet.
+    private struct Start {
+        let live: Int?
+        let front: pid_t?
+        let pointer: Int?
+        /// Whether the frontmost app was asked for its windows and did not answer.
+        let unanswered: Bool
+    }
+
+    /// Focus the window the window server numbers `id`. What a list hands back: a place in the ring
+    /// is only true of the ring it came from, and this one is rebuilt from scratch.
+    private func focusWindow(id: Int) {
+        moveFocus("focus window id \(id)") { ring, _ in
+            guard let index = ring.ids.firstIndex(of: id) else {
+                Log.note("focus window id \(id): that window is not on screen any more")
+                return nil
+            }
+            return index
+        }
+    }
+
     private struct Ring {
 
         let windows: [Target]
+        /// The window server's number for each entry, in the same order.
+        let ids: [Int]
         /// Apps asked for their windows that did not answer, as opposed to having none.
         let unanswered: Set<pid_t>
     }
@@ -1364,10 +1415,9 @@ final class Agent {
         // The checkpoints above are all before a read; the last read can run past the deadline.
         if now > deadline { return outOfTime() }
 
-        return Ring(
-            windows: ringOrder(ring, screens: screenFrames()).compactMap { targets[$0.key] },
-            unanswered: unanswered
-        )
+        let ordered = ringOrder(ring, screens: screenFrames())
+            .compactMap { entry in targets[entry.key].map { (id: entry.key, window: $0) } }
+        return Ring(windows: ordered.map(\.window), ids: ordered.map(\.id), unanswered: unanswered)
     }
 
     private func outOfTime() -> Ring? {
@@ -1561,6 +1611,85 @@ final class Agent {
     }
 
     // MARK: - Diagnostics
+
+    /// The focus ring as JSON on stdout, in the order the numbered shortcuts count. Built here
+    /// rather than asked of the running agent: the ring is derived from the window server and
+    /// Accessibility, so a second copy of the binary can read it for itself.
+    func listWindows() {
+        // Tighter than the probe's: every window costs several messages, and whoever is waiting on
+        // the list has a timeout of their own.
+        AXUIElementSetMessagingTimeout(systemWide, 0.2)
+        guard accessibilityTrusted(prompt: false) else {
+            fail("Heed has no Accessibility permission yet")
+            return
+        }
+        guard let ring = focusRing() else {
+            fail("no window list: some app did not answer in time")
+            return
+        }
+
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let frontmost = liveFocusIndex(in: ring.windows, frontmost: front) ?? topmostRingIndex(in: ring)
+        let listed = ring.windows.enumerated().map { index, window in
+            ListedForOutput(
+                id: ring.ids[index],
+                number: index + 1,
+                app: window.describedAs,
+                bundleID: window.bundleID,
+                title: window.title,
+                x: Int(window.frame.origin.x.rounded()),
+                y: Int(window.frame.origin.y.rounded()),
+                width: Int(window.frame.width.rounded()),
+                height: Int(window.frame.height.rounded()),
+                frontmost: index == frontmost
+            )
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(listed) else {
+            fail("could not encode the window list")
+            return
+        }
+        FileHandle.standardOutput.write(data)
+        print()
+    }
+
+    /// The frontmost ring entry as the window server stacks it. Whoever asked for the list is the
+    /// app in front while it is built, so the system's own answer is about them, not about focus.
+    private func topmostRingIndex(in ring: Ring) -> Int? {
+        for window in onScreenWindows() where window.level == 0 && window.pid != ownPid {
+            if let index = ring.windows.firstIndex(where: {
+                $0.pid == window.pid && framesAgree($0.frame, window.frame)
+            }) {
+                return index
+            }
+        }
+        return nil
+    }
+
+    private struct ListedForOutput: Encodable {
+        /// The window server's number, which is what to ask for the window back by.
+        let id: Int
+        /// Its place in ring order, which is what the numbered shortcuts count.
+        let number: Int
+        let app: String
+        let bundleID: String?
+        let title: String?
+        let x: Int
+        let y: Int
+        let width: Int
+        let height: Int
+        /// The window that was in front. Focus itself when the caller could be asked for it, and
+        /// the window server's own order when the caller is the app holding the front.
+        let frontmost: Bool
+    }
+
+    /// The reason on stderr, so a caller parsing stdout never has to tell an error from a window.
+    private func fail(_ why: String) {
+        FileHandle.standardError.write(Data("\(why)\n".utf8))
+        exit(1)
+    }
 
     /// One-shot report of what the agent sees at the pointer, using the agent's own resolution.
     func probe(at explicit: CGPoint? = nil) {

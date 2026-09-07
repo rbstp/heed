@@ -39,19 +39,38 @@ final class CommandTests: XCTestCase {
         XCTAssertNil(parseCommand("focus/next/again"))
     }
 
-    func testOnlyWindowsOneToNine() {
+    /// A place in the ring is only true of the ring it came from, so a list hands back the window
+    /// server's own number instead.
+    func testAWindowCanBeAskedForByItsWindowServerNumber() {
+        XCTAssertEqual(parseCommand("focus/id/1"), .focusWindowID(1))
+        XCTAssertEqual(parseCommand("focus/id/48213"), .focusWindowID(48213))
+        XCTAssertEqual(parseCommand(path: ["focus", "ID", "7"]), .focusWindowID(7))
+        XCTAssertNil(parseCommand("focus/id"))
+        XCTAssertNil(parseCommand("focus/id/0"))
+        XCTAssertNil(parseCommand("focus/id/-3"))
+        XCTAssertNil(parseCommand("focus/id/abc"))
+        XCTAssertNil(parseCommand("focus/id/7/8"))
+    }
+
+    /// The shortcuts stop at the digit keys; a window picked from a list does not.
+    func testWindowNumbersRunPastTheDigitKeys() {
         XCTAssertEqual(parseCommand("focus/1"), .focusNumber(1))
         XCTAssertEqual(parseCommand("focus/9"), .focusNumber(9))
+        XCTAssertEqual(parseCommand("focus/10"), .focusNumber(10))
+        XCTAssertEqual(parseCommand("focus/99"), .focusNumber(99))
         XCTAssertNil(parseCommand("focus/0"))
-        XCTAssertNil(parseCommand("focus/10"))
+        XCTAssertEqual(parseCommand("focus/100"), .focusNumber(100))
+        XCTAssertNil(parseCommand("focus/1000"))
         XCTAssertNil(parseCommand("focus/-1"))
+        XCTAssertNil(parseCommand("focus/1x"))
+        XCTAssertNil(parseCommand("focus/٣"), "digits the window list will never produce")
     }
 
     /// The wire form and the parser are two halves of one thing.
     func testEveryCommandSurvivesTheRoundTrip() {
         let commands: [HeedCommand] = [
             .toggle, .enable, .disable, .focusStep(1), .focusStep(-1),
-            .focusNumber(1), .focusNumber(9),
+            .focusNumber(1), .focusNumber(9), .focusNumber(23), .focusWindowID(48213),
         ] + FocusDirection.allCases.map { .focusDirection($0) }
 
         for command in commands {

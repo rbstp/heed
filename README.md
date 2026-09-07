@@ -22,7 +22,7 @@ brew install --cask rbstp/tap/heed
 From source:
 
 ```sh
-make cert      # once; keeps the Accessibility grant across rebuilds
+make cert      # once, and only without a Developer ID; keeps the Accessibility grant across rebuilds
 make install   # build, sign, install, start
 ```
 
@@ -272,15 +272,16 @@ The log is append-only; `make logs-clear` truncates it.
 
 ### Accessibility stopped working after an upgrade
 
-Homebrew releases are ad-hoc signed, so every new binary is a new identity and needs a new
-Accessibility grant. The cask clears the stale grant during installation. If Heed stays dimmed:
+Releases from 0.12.0 on are signed with a Developer ID and notarized, so the grant carries across
+versions. Upgrading from an older, ad-hoc signed build is the one exception: that grant was tied to
+the old binary and cannot transfer. If Heed stays dimmed:
 
 ```sh
 tccutil reset Accessibility io.github.rbstp.heed
 ```
 
-Source builds keep the permission across rebuilds once `make cert` has created the local signing
-identity; `make requirement` shows which signing mode the installed app uses.
+Source builds keep the permission the same way, whether they are signed with a Developer ID or with
+the local identity `make cert` creates; `make requirement` shows which mode the installed app uses.
 
 ## Limitations
 
@@ -289,7 +290,6 @@ identity; `make requirement` shows which signing mode the installed app uses.
   XQuartz, and Java applications expose no individual windows: the pointer focuses them at
   application level, and the focus shortcuts skip them.
 - Stage Manager may override window ordering.
-- Homebrew upgrades require the Accessibility permission again.
 
 ## Development
 
@@ -302,6 +302,28 @@ make dist
 CI tests and packages pull requests. Merging into `master` creates a release unless the change only
 touches `.github/`, `raycast/` or this README, or the title contains `[skip-release]`. A title
 starting with `feat` bumps the minor version; anything else bumps the patch.
+
+### Signing
+
+`make bundle` picks the Developer ID Application certificate named in the Makefile when its private
+key is in the keychain, falls back to the local identity from `make cert`, and refuses to sign when
+it finds neither -- `ADHOC=1` overrides that on purpose. Only a Developer ID signature can be
+notarized, so only that one produces an archive Gatekeeper accepts; `make dist` says so and carries
+on when it has to build with anything else.
+
+`make dist` notarizes through the `heed` keychain profile, created once with:
+
+```sh
+xcrun notarytool store-credentials heed --key AuthKey_XXXXXXXXXX.p8 --key-id KEY_ID --issuer ISSUER_ID
+```
+
+A rejection prints its submission id; `xcrun notarytool log <id> --keychain-profile heed` says what
+the notary service objected to.
+
+The release workflow has no keychain profile. It imports the certificate into a keychain of its own
+and passes the App Store Connect key to `make dist` directly, from five repository secrets:
+`APPLE_CERT_P12` (the exported `.p12`, base64), `APPLE_CERT_PASSWORD`, `APPLE_KEY_P8` (the `.p8`,
+base64), `APPLE_KEY_ID` and `APPLE_ISSUER_ID`.
 
 ## Prior art
 

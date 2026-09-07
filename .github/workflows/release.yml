@@ -81,11 +81,58 @@ jobs:
       - name: test
         run: swift test
 
-      - name: build the release archive
+      - name: check for the signing secrets
+        run: |
+          missing=
+          for name in APPLE_CERT_P12 APPLE_CERT_PASSWORD APPLE_KEY_P8 APPLE_KEY_ID APPLE_ISSUER_ID; do
+            eval "value=\$$name"
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          [ -z "$missing" ] || {
+            echo "unset repository secrets:$missing"
+            echo "Without them the build cannot be signed with the Developer ID, and an unsigned"
+            echo "release is one Gatekeeper refuses. See README.md, Releasing."
+            exit 1
+          }
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
+
+      # A keychain of its own, so the private key never touches the runner's login keychain.
+      - name: import the signing certificate
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          printf '%s' "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          # No idle or sleep lock: codesign runs minutes later, on a keychain nothing can unlock.
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$APPLE_CERT_PASSWORD" \
+            -T /usr/bin/codesign -f pkcs12
+          # Without a partition list, codesign's first use of the key blocks on a UI prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" \
+            "$keychain" > /dev/null
+          # Prepended rather than replacing: find-identity only searches the list.
+          security list-keychains -d user | tr -d '"' \
+            | xargs security list-keychains -d user -s "$keychain"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$keychain"
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+
+      - name: build, sign and notarize the release archive
         id: dist
         run: |
-          # ADHOC=1: there is no Developer ID, and make bundle refuses to guess.
-          make dist ADHOC=1 VERSION="$VERSION"
+          printf '%s' "$APPLE_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          make dist VERSION="$VERSION" \
+            NOTARY_KEY="$RUNNER_TEMP/notary.p8" \
+            NOTARY_KEY_ID="$APPLE_KEY_ID" \
+            NOTARY_ISSUER="$APPLE_ISSUER_ID"
           zip=".build/dist/Heed-$VERSION.zip"
           {
             echo "sha256=$(shasum -a 256 "$zip" | cut -d ' ' -f 1)"
@@ -93,6 +140,13 @@ jobs:
           } >> "$GITHUB_OUTPUT"
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
+
+      # `make notarize` only warns when it skips, and an unsigned release is worse than none.
+      - name: check the archive is notarized
+        run: xcrun stapler validate ".build/stage/Heed.app"
 
       - name: publish the release
         run: |
@@ -112,6 +166,14 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           ZIP: ${{ steps.dist.outputs.zip }}
+
+      - name: forget the signing key
+        if: ${{ !cancelled() }}
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8"
+          if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+          fi
 
   cask:
     needs: build

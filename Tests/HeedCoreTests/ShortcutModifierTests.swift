@@ -27,8 +27,8 @@ final class ShortcutModifierTests: XCTestCase {
         XCTAssertEqual(sharedModifiers(of: ["", "none", "nonsense"]), [])
     }
 
-    /// The bug this fixes: rewriting every setting onto one modifier put the toggle and focus-left,
-    /// which are both H, on the same combination, and that pair can never both be registered.
+    /// The bug: rewriting everything onto one modifier put the toggle and focus-left, both H, on
+    /// the same combination.
     func testLeavesSettingsThatAreNotUnderTheSharedModifier() {
         let moved = rewriteHotkeys(defaults, under: [.control, .command], to: [.option, .command])
         XCTAssertEqual(moved, ["alt+cmd+h", "alt+cmd+right", "alt+cmd+left", "alt+cmd+1",
@@ -73,7 +73,6 @@ final class ShortcutModifierTests: XCTestCase {
         XCTAssertNil(firstClash(in: claims))
     }
 
-    /// The same key under different modifiers is a different combination.
     func testTheModifiersArePartOfTheCombination() {
         let claims: [(name: String, spec: HotkeySpec)] = [
             (name: "toggle", spec: HotkeySpec("ctrl+cmd+h")!),
@@ -82,8 +81,7 @@ final class ShortcutModifierTests: XCTestCase {
         XCTAssertNil(firstClash(in: claims))
     }
 
-    /// Picking the modifier the directional shortcuts already use genuinely cannot be done, and
-    /// the clash is what says so instead of Carbon refusing the second registration.
+    /// Picking the modifier the directional shortcuts already use genuinely cannot be done.
     func testMovingOntoTheDirectionalModifierClashes() {
         let moved = rewriteHotkeys(defaults, under: [.control, .command],
                                    to: [.control, .option, .command])

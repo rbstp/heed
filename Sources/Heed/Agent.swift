@@ -17,9 +17,7 @@ final class Agent {
 
     // Main thread only; `syncMenuBar` and `syncHotkey` are the hops from `queue`.
     private var menuBar: MenuBarController?
-    /// What each setting holds: the combination it was given, and the registrations keeping it. The
-    /// numbered shortcut keeps nine. Keyed by setting so a claim can tell a combination that is not
-    /// moving from one that is, which Carbon cannot be asked twice for.
+    /// Keyed by setting, so a claim can tell a combination that is moving from one that is not.
     private var registrations: [Shortcut: Registration] = [:]
     private var shortcut: HotkeySpec?
     private var numberOverlay: NumberOverlay?
@@ -402,8 +400,7 @@ final class Agent {
                                               refused: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
 
-        // Read the settings before anything is registered, so two of them asking for the same
-        // combination is caught as what it is rather than as Carbon refusing the second.
+        // Read before anything is registered, so a clash is caught as one.
         var specs: [HotkeySpec?] = []
         var wanted: [Shortcut: [(HotkeySpec, () -> Void)]] = [:]
         for (shortcut, text) in zip(Shortcut.allCases, texts) {
@@ -429,12 +426,8 @@ final class Agent {
 
         var refused = false
 
-        // A combination belongs to one action, so two settings naming the same one can never both
-        // be registered: the second is refused, and the refusal reads as another app holding it
-        // when the other holder is Heed. Found here instead, the later claim is dropped and both
-        // sides can be named. Dropped rather than the whole set abandoned, so a configuration
-        // written that way still starts with every other shortcut working; `refused` is what stops
-        // the modifier menu from applying a set it could only half move.
+        // A combination belongs to one action. The later claim is dropped rather than the whole
+        // set, so the rest still register; `refused` stops the menu applying a half-moved set.
         while true {
             let claims = Shortcut.allCases.flatMap { shortcut in
                 (wanted[shortcut] ?? []).map { (name: shortcut, spec: $0.0) }
@@ -451,8 +444,7 @@ final class Agent {
         for (index, shortcut) in Shortcut.allCases.enumerated() {
             guard let combinations = wanted[shortcut], let spec = specs[index] else { continue }
 
-            // Carbon refuses a combination this process already holds, so a setting that is not
-            // moving keeps what it has rather than asking again and being turned down by itself.
+            // Carbon refuses a combination this process already holds.
             if let standing = registrations[shortcut], standing.spec == spec {
                 held[shortcut] = standing
                 continue
@@ -483,14 +475,12 @@ final class Agent {
         }
     }
 
-    /// Where the toggle sits in `Shortcut.allCases`, which is the order `claim` reports in.
+    /// `Shortcut.allCases` order is the order `claim` reports in.
     private static let toggleIndex = Shortcut.allCases.firstIndex(of: .toggle) ?? 0
 
     private func adopt(specs: [HotkeySpec?]) {
         shortcut = specs.indices.contains(Agent.toggleIndex) ? specs[Agent.toggleIndex] : nil
         menuBar?.shortcut = shortcut
-        // The tick goes beside the modifier the menu would replace, which is the one the toggle is
-        // under whenever it is registered.
         menuBar?.modifiers = shortcut?.modifiers ?? specs.compactMap { $0 }.first?.modifiers
         // The numbers stand for the numbered shortcuts, so they follow that setting's modifier
         // rather than the toggle's: the two need not be the same, and only one is being pictured.
@@ -501,20 +491,16 @@ final class Agent {
     }
 
     /// Put the shortcuts under a different modifier, keeping each key. All or none, and stored only
-    /// once it took. `report` is called on the main thread.
-    ///
-    /// Only the settings already under the modifier being replaced move. One deliberately given a
-    /// different combination -- the directional shortcuts carry an extra Option out of the box --
-    /// keeps it, rather than being flattened onto the modifier every other shortcut just took and
-    /// landing on a key one of them already has.
+    /// once it took. `report` is called on the main thread. Only the settings already under the
+    /// modifier being replaced move; see `rewriteHotkeys`.
     func changeModifiers(to preset: ModifierPreset, report: @escaping (Bool) -> Void) {
         queue.async { [self] in
             let current = shortcutTexts
             let under = sharedModifiers(of: current, primary: Agent.toggleIndex)
             let texts = rewriteHotkeys(current, under: under, to: preset.modifiers)
 
-            // Compared as combinations: the stored text is however it was typed and the rewrite is
-            // canonical, so a setting that did not move must not read as one that did.
+            // Compared as combinations: the stored text is however it was typed, the rewrite is
+            // canonical.
             guard !zip(current, texts).allSatisfy({ HotkeySpec($0) == HotkeySpec($1) }) else {
                 DispatchQueue.main.async { report(true) }
                 return

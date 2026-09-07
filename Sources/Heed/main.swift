@@ -13,14 +13,12 @@ let usage = "usage: Heed [--probe [X Y]] [--windows] [--toggle] [--on] [--off] "
 
 let agent = Agent()
 
-// `--probe` inspects the pointer; `--probe X Y` inspects a screen point. Never starts the loop.
 if let flag = CommandLine.arguments.firstIndex(of: "--probe") {
     let rest = CommandLine.arguments.dropFirst(flag + 1).prefix(2).compactMap(Double.init)
     agent.probe(at: rest.count == 2 ? CGPoint(x: rest[0], y: rest[1]) : nil)
     exit(0)
 }
 
-// `--windows` prints the focus ring as JSON and exits, for anything driving Heed from outside.
 if CommandLine.arguments.contains("--windows") {
     agent.listWindows()
     exit(0)
@@ -49,7 +47,6 @@ case .none:
     break
 }
 
-// A status item needs NSApplication's window server connection and event loop to be clickable.
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 

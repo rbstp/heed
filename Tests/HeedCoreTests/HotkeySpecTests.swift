@@ -117,7 +117,6 @@ final class HotkeySpecTests: XCTestCase {
         }
     }
 
-    /// The same rule a typed combination has to pass.
     func testAModifierChangeThatWouldNotBeALegalHotkeyIsRefused() {
         XCTAssertNil(HotkeySpec("cmd+ctrl+h")!.withModifiers([.shift]))
         XCTAssertNil(HotkeySpec("cmd+ctrl+h")!.withModifiers([]))

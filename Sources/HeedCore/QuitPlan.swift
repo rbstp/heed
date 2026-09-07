@@ -1,5 +1,3 @@
-/// How to quit. Under launchd with KeepAlive, exiting only respawns the process; the job has to be
-/// unloaded instead.
 public enum QuitPlan: Equatable, Sendable {
     case terminate
     case unloadLoginAgent(domainTarget: String)
@@ -13,7 +11,6 @@ public enum QuitPlan: Equatable, Sendable {
     }
 
     /// `bootout`, not `stop` or `kill`: those leave the job loaded, which is what KeepAlive restarts.
-    /// The plist stays in place, so the next login bootstraps it again.
     public var launchctlArguments: [String]? {
         guard case let .unloadLoginAgent(domainTarget) = self else { return nil }
         return ["bootout", domainTarget]

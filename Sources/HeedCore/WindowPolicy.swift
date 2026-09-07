@@ -7,7 +7,6 @@ import Foundation
 
 public enum WindowSource: Equatable, Sendable {
     case topLevel
-    /// `AXWindow`, which maps an element inside a sheet to the sheet's owner.
     case windowAttribute
     case hitElement
 }
@@ -99,8 +98,6 @@ public struct PromptRule: Equatable, Sendable {
     }
 }
 
-/// Whether the window holding an app's key focus keeps it against a pointer-driven switch to a
-/// sibling window. A dialog can never be acquired by pointer, so once buried it stays buried.
 public func transientWindowHoldsFocus(subrole: String?) -> Bool {
     guard let subrole else { return false }
     return transientSubroles.contains(subrole)

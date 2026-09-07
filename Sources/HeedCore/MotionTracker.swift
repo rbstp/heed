@@ -1,5 +1,3 @@
-/// A sliding-window sum of recent pointer movement, in ticks so it scales with the poll interval.
-///
 /// Tells the pointer moving onto a window from a window arriving under a still pointer: a slow
 /// crossing moves a pixel or two per tick, so one tick's movement is not enough to go on.
 public struct MotionTracker {

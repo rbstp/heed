@@ -1,8 +1,6 @@
 import Foundation
 
-/// Excludes a window from pointer focus by title, optionally scoped to one app.
 public struct TitleRule {
-    /// Nil applies the rule to every app.
     public let bundleID: String?
     private let regex: NSRegularExpression
 

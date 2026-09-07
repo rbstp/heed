@@ -1,19 +1,14 @@
 import CoreGraphics
 
-/// Heed's mark: what has your attention, and the four ways focus can leave it.
-///
 /// Geometry only, so the menu bar item and the app icon draw the same shape from one description.
 /// CoreGraphics rather than AppKit keeps this module free of the frameworks the agent needs.
 public enum Glyph: Equatable, Sendable {
-    /// Chevrons around a filled core: Heed is on, something is being attended to.
     case attending
     /// The chevrons alone: Heed is off. A shape difference as well as the dimming, which also stands
     /// for "no Accessibility permission".
     case idle
 }
 
-/// The glyph as a single path to fill, drawn inside a `side` by `side` box at the origin.
-///
 /// One fillable path rather than a stroke and a fill: a caller drawing a menu bar template image
 /// has nothing but a mask to fill, and stroking here means both callers get identical ink.
 public func glyphPath(_ glyph: Glyph, side: CGFloat) -> CGPath {
@@ -28,8 +23,6 @@ public func glyphPath(_ glyph: Glyph, side: CGFloat) -> CGPath {
 
     let chevrons = CGMutablePath()
     for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-        // The tails are the opening offset across the direction of travel, so one description
-        // draws all four and they cannot drift out of square with each other.
         let sideways = CGPoint(x: CGFloat(dy) * across, y: CGFloat(dx) * across)
         let opening = CGPoint(x: middle + CGFloat(dx) * back, y: middle + CGFloat(dy) * back)
         chevrons.move(to: CGPoint(x: opening.x + sideways.x, y: opening.y + sideways.y))

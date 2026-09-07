@@ -1,7 +1,6 @@
 import AppKit
 import HeedCore
 
-/// The menu bar item. Main thread only; `Agent` hops to it explicitly.
 final class MenuBarController: NSObject {
     private let item: NSStatusItem
     private let onClick: () -> Void
@@ -9,12 +8,8 @@ final class MenuBarController: NSObject {
     private let onChooseModifier: (ModifierPreset) -> Void
     private let onToggleNumbers: () -> Void
     private var state = MenuBarState(enabled: true, trusted: true)
-    /// Whether the window numbers are switched on, for the check beside the menu item.
     var showsNumbers = true
-    /// The toggle hotkey, shown beside the menu item. Nil when none is registered.
     var shortcut: HotkeySpec?
-    /// The modifier every shortcut is registered under. Nil when nothing is registered, or when it
-    /// is a combination the menu does not offer.
     var modifiers: Set<HotkeySpec.Modifier>?
     private var flashRestore: DispatchWorkItem?
 
@@ -143,7 +138,6 @@ final class MenuBarController: NSObject {
         onChooseModifier(presets[sender.tag])
     }
 
-    /// Flash the glyph green or red to say whether a change took. Refusal shows longer.
     func flash(accepted: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
 
@@ -162,12 +156,9 @@ final class MenuBarController: NSObject {
         item.button?.image = MenuBarController.mark(state.glyph, colour: colour)
     }
 
-    /// Heed's mark at menu bar size. 18 points is what AppKit sizes a status item symbol to, and the
-    /// glyph's proportions are ninths, so every straight edge lands on a whole pixel at 1x.
-    ///
-    /// A template unless coloured; a template is a mask, so the flash colour has to be drawn into
-    /// the image rather than tinted onto it. The drawing handler runs again per backing scale, so
-    /// the same call is right on a Retina display and on a 1x one.
+    /// 18 points is what AppKit sizes a status item symbol to, and the glyph's proportions are
+    /// ninths, so every straight edge lands on a whole pixel at 1x. A template is a mask, so the
+    /// flash colour has to be drawn in rather than tinted on.
     private static func mark(_ glyph: Glyph, colour: NSColor?) -> NSImage {
         let side: CGFloat = 18
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in

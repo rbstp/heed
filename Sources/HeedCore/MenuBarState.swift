@@ -1,12 +1,8 @@
-/// What the menu bar icon shows, derived from the two facts that decide it.
 public struct MenuBarState: Equatable, Sendable {
-    /// True when the pointer moves nothing: switched off, or no Accessibility grant.
     public let dimmed: Bool
     public let label: String
     public let tooltip: String
     public let toggleTitle: String
-    /// The menu bar mark: brackets holding a core while on, empty brackets while off, so the switch
-    /// position shows by shape as well as by dimming, which also means "no permission".
     public let glyph: Glyph
 
     public init(enabled: Bool, trusted: Bool) {

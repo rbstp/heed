@@ -1,22 +1,18 @@
 import AppKit
 import HeedCore
 
-/// The numbers shown over each window while the numbered shortcuts' modifier is held, so the window
-/// to switch to can be read off the screen rather than counted.
-///
 /// One panel per badge rather than one sheet per screen: a panel is placed in global coordinates
 /// without caring which display a window is on, and there are never more than nine. Main thread
 /// only; `Agent` hops to it explicitly.
+/// One panel per badge: a panel is placed in global coordinates without caring which display a
+/// window is on, and there are never more than nine. Main thread only.
 final class NumberOverlay {
-    /// Big enough to read across a room, small enough not to bury a narrow window.
     private static let side: CGFloat = 56
 
     private var panels: [NSPanel] = []
 
     var isShowing: Bool { !panels.isEmpty }
 
-    /// Replace whatever is on screen with these badges. Replacing rather than diffing: the whole set
-    /// is rebuilt each time the ring is, and nine windows is not enough work to be worth matching up.
     func show(_ badges: [NumberBadge]) {
         dispatchPrecondition(condition: .onQueue(.main))
         hide()
@@ -48,21 +44,16 @@ final class NumberOverlay {
         // Above ordinary windows but below menus, so a menu opened over one still reads first.
         panel.level = .statusBar
         panel.ignoresMouseEvents = true
-        // Follows the user between Spaces, and stays out of Mission Control and Cmd-Tab.
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle,
                                     .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         // The panels are dropped by letting go of them, never closed; a window that releases itself
         // on close would then be over-released.
         panel.isReleasedWhenClosed = false
-        // An LSUIElement app has nothing to take focus from, but a panel that could take it would
-        // still put the keystroke the numbers are there to serve into itself.
         panel.orderFrontRegardless()
         return panel
     }
 
-    /// The badge itself: a dark rounded tile with a light rim, which reads over a window of any
-    /// colour without needing to know what is behind it.
     private final class BadgeView: NSView {
         private let number: Int
 
@@ -94,8 +85,6 @@ final class NumberOverlay {
                        withAttributes: attributes)
         }
 
-        /// Rounded, to match the tile and the app's own mark. Falls back to the plain system face
-        /// where the rounded design is not available.
         private static let font: NSFont = {
             let base = NSFont.systemFont(ofSize: 28, weight: .bold)
             guard let rounded = base.fontDescriptor.withDesign(.rounded) else { return base }

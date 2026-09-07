@@ -79,7 +79,6 @@ final class DwellMachineTests: XCTestCase {
 
     // MARK: - Movement within a target
 
-    /// Drift inside one window must not keep resetting the timer.
     func testMovementWithinSameTargetDoesNotRestartDwell() {
         let h = Harness(dwell: 0.2)
         h.underCursor = "A"

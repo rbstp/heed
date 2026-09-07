@@ -21,8 +21,7 @@ final class Agent {
     private var registrations: [Shortcut: Registration] = [:]
     private var shortcut: HotkeySpec?
     private var numberOverlay: NumberOverlay?
-    /// The modifier the numbered shortcuts are registered under, which is the one that raises the
-    /// numbers. Nil when no numbered shortcut is registered, and then nothing raises them.
+    /// The numbered shortcuts' modifier, which is the one that raises the numbers.
     private var numberModifiers: Set<HotkeySpec.Modifier>?
     /// `config.windowNumbers` and its delay, mirrored for the main thread by `syncMenuBar`.
     private var numbersEnabled = true
@@ -30,9 +29,8 @@ final class Agent {
     private var numberWatch: [Any] = []
     private var numbersArmWork: DispatchWorkItem?
     private var numbersWatchdog: DispatchSourceTimer?
-    /// A ring is being built for the numbers, and whether another was asked for while it was.
-    /// Building one is the most expensive thing the agent does, and it runs on the queue the focus
-    /// loop and the shortcuts themselves need, so a burst of shortcuts must not queue a build each.
+    /// Building a ring is the most expensive thing the agent does, and it runs on the queue the
+    /// shortcuts themselves need, so a burst of them must not queue a build each.
     private var numbersBuilding = false
     private var numbersAskedAgain = false
     /// Bumped whenever the numbers are asked for or taken down, so a ring that finished building
@@ -49,7 +47,6 @@ final class Agent {
     private var pendingInvalidation = false
 
     private var motion = MotionTracker(capacity: 5)
-    /// The last window accepted as a focus target.
     private var lastResolved: Target?
     /// The last window under the pointer, whether or not it was allowed to take focus.
     private var lastPointerWindow: Target?
@@ -84,9 +81,9 @@ final class Agent {
     /// The last app other than Heed to come forward. A `heed://` URL activates Heed, so this is the
     /// app a command arriving that way means.
     private var lastForeignFront: pid_t?
-    /// The app a click brought forward, if any. Sampled as the activation arrives: the loop can
-    /// notice the handover long after, by when "how long since the last click" says nothing. Keyed
-    /// by pid so a stale answer cannot speak for the app that came forward next.
+    /// Sampled as the activation arrives: the loop can notice the handover long after, by when
+    /// "how long since the last click" says nothing. Keyed by pid so a stale answer cannot speak
+    /// for the app that came forward next.
     private var clickActivated: pid_t?
 
     private var now: Double { ProcessInfo.processInfo.systemUptime }
@@ -128,10 +125,8 @@ final class Agent {
             pendingInvalidation = true
             wakeLoop()
         }
-        // Windows are somewhere else now, so numbers drawn a moment ago point at the wrong ones and
-        // the digits they promise belong to a ring that has been rebuilt underneath them. A Space
-        // change and a display rearrangement both move windows without touching the modifier, so
-        // nothing else here would notice.
+        // A Space change and a display rearrangement move windows without touching the modifier,
+        // so nothing else here would notice the numbers are now pointing at the wrong ones.
         DispatchQueue.main.async { [self] in refreshNumbers() }
     }
 
@@ -248,7 +243,6 @@ final class Agent {
         syncMenuBar()
     }
 
-    /// Everything another program can ask for, over the URL scheme or the command-line flags.
     func perform(_ command: HeedCommand) {
         switch command {
         case .toggle: toggleEnabled()
@@ -479,7 +473,6 @@ final class Agent {
         return (held, specs, refused, clashes)
     }
 
-    /// Which other setting's live registration already holds one of `combinations`.
     private func standingHolder(
         of combinations: [HotkeySpec], excluding shortcut: Shortcut
     ) -> (shortcut: Shortcut, spec: HotkeySpec)? {
@@ -575,9 +568,6 @@ final class Agent {
 
     // MARK: - Window numbers
 
-    /// Watch the modifier keys, so holding the one the numbered shortcuts are registered under puts
-    /// their numbers on the windows they would reach.
-    ///
     /// Installed from `start`, which runs only once Accessibility is granted: a global key monitor
     /// is handed nothing without it, and would sit there silently never firing.
     private func installNumberWatch() {
@@ -624,8 +614,6 @@ final class Agent {
         DispatchQueue.main.asyncAfter(deadline: .now() + numbersDelay, execute: work)
     }
 
-    /// Build the ring the numbered shortcuts would act on and badge it.
-    ///
     /// Counted by generation: building a ring is many cross-process calls, and the key can be let go
     /// during them, so an answer that arrives after the numbers were dismissed is dropped.
     private func requestNumbers() {
@@ -684,7 +672,6 @@ final class Agent {
 
     /// Where each ring window's number goes: the middle of the largest part of it that nothing in
     /// front covers, so the digit sits on the window it names rather than on whatever buried it.
-    ///
     /// The stack is read again rather than carried out of `focusRing`, which judges visibility but
     /// keeps no record of what did the covering. One window server round trip, for at most nine
     /// windows, on a key the user is deliberately holding down.
@@ -703,9 +690,6 @@ final class Agent {
         }
     }
 
-    /// Ask every so often whether the modifier is still down, and take the numbers away when it is
-    /// not.
-    ///
     /// A release can go unseen: secure event input takes the keyboard away from every monitor, so
     /// letting go inside a password field delivers nothing. Without this the numbers would sit
     /// there for good, with focus following held off behind them. `NSEvent.modifierFlags` is a
@@ -751,8 +735,6 @@ final class Agent {
         }
     }
 
-    /// Redraw the numbers after a focus shortcut, while the modifier is still down.
-    ///
     /// Ring order is spatial, so raising a window does not renumber anything; a window the raise
     /// uncovered, though, joins the ring and shifts every number after it.
     private func refreshNumbers() {
@@ -1373,7 +1355,6 @@ final class Agent {
         }
     }
 
-    /// Live check against system focus.
     private func focusMatches(_ target: Target) -> Bool {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else {
             return false
@@ -1422,7 +1403,6 @@ final class Agent {
 
     /// Move the pointer into a window that just took focus, so pointer focus and keyboard focus
     /// agree rather than fight: the next hit test resolves the window that already has focus.
-    /// Returns where it landed, or nil when nothing moved.
     private func warpPointer(into frame: CGRect, why: String) -> CGPoint? {
         guard config.warpPointer else { return nil }
         // No displays is a failed read, not a machine without screens: with nothing to clamp
@@ -1590,7 +1570,6 @@ final class Agent {
         }
     }
 
-    /// Focus the nearest window in a direction, starting from the one that has focus.
     private func focusDirection(_ direction: FocusDirection) {
         moveFocus("focus \(direction.rawValue)") { [self] ring, start in
             let windows = ring.windows
@@ -1679,10 +1658,9 @@ final class Agent {
         let unanswered: Set<pid_t>
     }
 
-    /// Every visible window the shortcuts can reach, in ring order. The window server says what is
-    /// on screen in this Space and in what order; Accessibility judges each window and hands back
-    /// the element to focus. Apps with no usable tree are left out: several windows that cannot be
-    /// told apart would be one entry the shortcut could never step between.
+    /// The window server says what is on screen in this Space and in what order; Accessibility
+    /// judges each window and hands back the element to focus. Apps with no usable tree are left
+    /// out: windows that cannot be told apart would be one entry to step between.
     private func focusRing() -> Ring? {
         let stack = onScreenWindows().filter { $0.level == 0 }
         let frames = stack.map(\.frame)
@@ -1944,9 +1922,8 @@ final class Agent {
 
     // MARK: - Diagnostics
 
-    /// The focus ring as JSON on stdout, in the order the numbered shortcuts count. Built here
-    /// rather than asked of the running agent: the ring is derived from the window server and
-    /// Accessibility, so a second copy of the binary can read it for itself.
+    /// Built here rather than asked of the running agent: the ring comes from the window server
+    /// and Accessibility, so a second copy of the binary can read it for itself.
     func listWindows() {
         // Tighter than the probe's: every window costs several messages, and whoever is waiting on
         // the list has a timeout of their own.
@@ -2023,7 +2000,6 @@ final class Agent {
         exit(1)
     }
 
-    /// One-shot report of what the agent sees at the pointer, using the agent's own resolution.
     func probe(at explicit: CGPoint? = nil) {
         Log.verbose = true
         AXUIElementSetMessagingTimeout(systemWide, 0.5)

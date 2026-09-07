@@ -221,7 +221,7 @@ ifneq ($(NOTARIZABLE),1)
 	@echo "Gatekeeper will refuse this archive on a machine that downloads it."
 else
 	@# --timeout: without one, a notary service that never answers hangs the release job for hours.
-	xcrun notarytool submit "$(ZIP)" $(NOTARY_AUTH) --wait --timeout 30m
+	xcrun notarytool submit "$(ZIP)" $(NOTARY_AUTH) --wait --timeout 1h
 	xcrun stapler staple "$(STAGE)/$(APP_NAME).app"
 	@rm -f "$(ZIP)"
 	ditto -c -k --keepParent --sequesterRsrc "$(STAGE)/$(APP_NAME).app" "$(ZIP)"

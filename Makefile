@@ -1,8 +1,13 @@
 # Heed -- build, package, install. See README.md.
 
 BUNDLE_ID   := io.github.rbstp.heed
-CERT_NAME   := Heed Local Signing
 APP_NAME    := Heed
+# The distribution identity. Notarization needs a real Developer ID, and its signature gives the app
+# an identity-based designated requirement, so one Accessibility grant covers every later build.
+TEAM_ID     := RM3UT3MMSR
+DEVID_NAME  := Developer ID Application: RICHARD BOISVERT-ST-PIERRE ($(TEAM_ID))
+# The fallback for anyone without that private key: self-signed, trusted locally, `make cert`.
+CERT_NAME   := Heed Local Signing
 # Latest tag, or 0.0.0 when none is reachable (a shallow CI clone). The release workflow overrides it.
 VERSION     := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 ifeq ($(VERSION),)
@@ -15,17 +20,31 @@ EXECUTABLE  := $(APP)/Contents/MacOS/$(APP_NAME)
 AGENT_PLIST := $(HOME)/Library/LaunchAgents/$(BUNDLE_ID).plist
 LOG         := $(HOME)/Library/Logs/heed.log
 DOMAIN      := gui/$(shell id -u)
-# The certificate's hash, or empty: not found, but also a locked keychain or a missing tool.
+# A certificate's hash, or empty: not found, but also a locked keychain or a missing tool.
 # Signing refuses rather than silently going ad-hoc; ADHOC=1 forces ad-hoc on purpose.
-SIGN_ID     := $(shell security find-identity -v -p codesigning 2>/dev/null \
-                 | grep -F '"$(CERT_NAME)"' | head -1 | awk '{print $$2}')
+find_identity = $(shell security find-identity -v -p codesigning 2>/dev/null \
+                  | grep -F '"$(1)"' | head -1 | awk '{print $$2}')
+DEVID_ID    := $(call find_identity,$(DEVID_NAME))
+LOCAL_ID    := $(call find_identity,$(CERT_NAME))
 ifeq ($(ADHOC),1)
 CODESIGN_ID := -
 SIGNED_BY   := ad-hoc
+else ifneq ($(DEVID_ID),)
+CODESIGN_ID := $(DEVID_ID)
+SIGNED_BY   := $(DEVID_NAME)
+# The notary service rejects anything without the hardened runtime and a secure timestamp.
+CODESIGN_OPTS := --options runtime --timestamp
+NOTARIZABLE := 1
 else
-CODESIGN_ID := $(if $(SIGN_ID),$(SIGN_ID),-)
-SIGNED_BY   := $(if $(SIGN_ID),$(CERT_NAME),ad-hoc)
+CODESIGN_ID := $(if $(LOCAL_ID),$(LOCAL_ID),-)
+SIGNED_BY   := $(if $(LOCAL_ID),$(CERT_NAME),ad-hoc)
 endif
+
+# Locally the notary credentials sit in a keychain profile, from `xcrun notarytool
+# store-credentials`; CI has no keychain profile and passes the App Store Connect key itself.
+NOTARY_PROFILE := heed
+NOTARY_AUTH := $(if $(NOTARY_KEY),--key "$(NOTARY_KEY)" --key-id "$(NOTARY_KEY_ID)" \
+                 --issuer "$(NOTARY_ISSUER)",--keychain-profile "$(NOTARY_PROFILE)")
 
 # sed cannot be trusted with these characters in the generated plists.
 define check_paths
@@ -42,8 +61,8 @@ STAGE       := .build/stage
 DIST        := .build/dist
 ZIP         := $(DIST)/$(APP_NAME)-$(VERSION).zip
 
-.PHONY: all build test bundle dist install install-agent uninstall restart logs logs-clear probe \
-        icon cert check-package reset-permission requirement clean
+.PHONY: all build test bundle dist notarize install install-agent uninstall restart logs \
+        logs-clear probe icon cert check-package reset-permission requirement clean
 
 all: build
 
@@ -72,8 +91,9 @@ $(ICNS): $(ICON_SRC) Makefile | build
 
 ## Assemble and sign the .app under $(INSTALL_DIR).
 bundle: build $(ICNS)
-	@if [ -z "$(SIGN_ID)" ] && [ "$(ADHOC)" != "1" ]; then \
-		echo "no code-signing identity named \"$(CERT_NAME)\" was found. Either:"; \
+	@if [ "$(CODESIGN_ID)" = "-" ] && [ "$(ADHOC)" != "1" ]; then \
+		echo "no code-signing identity was found -- neither a Developer ID nor \"$(CERT_NAME)\"."; \
+		echo "Either:"; \
 		echo "  make cert             create one, so the permission survives rebuilds"; \
 		echo "  make bundle ADHOC=1   sign ad-hoc deliberately (permission resets each rebuild)"; \
 		exit 1; \
@@ -88,7 +108,7 @@ bundle: build $(ICNS)
 	    -e 's|@APP_NAME@|$(APP_NAME)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \
 	    Resources/Info.plist > "$(APP)/Contents/Info.plist"
-	codesign --force --sign "$(CODESIGN_ID)" --identifier "$(BUNDLE_ID)" "$(APP)"
+	codesign --force --sign "$(CODESIGN_ID)" --identifier "$(BUNDLE_ID)" $(CODESIGN_OPTS) "$(APP)"
 	@echo "built $(APP), signed by $(SIGNED_BY)"
 
 # install-agent runs from the recipe: as a prerequisite, `make -j` could bootstrap it before the
@@ -190,7 +210,24 @@ dist:
 	codesign --verify --deep --strict "$(STAGE)/$(APP_NAME).app"
 	@mkdir -p "$(DIST)"
 	ditto -c -k --keepParent --sequesterRsrc "$(STAGE)/$(APP_NAME).app" "$(ZIP)"
+	@$(MAKE) --no-print-directory notarize
 	@shasum -a 256 "$(ZIP)"
+
+## Notarize what `dist` staged, staple the ticket into the app, and repack: the ticket has to be
+## inside the archive people download, or the first launch needs the network to find one.
+notarize:
+ifneq ($(NOTARIZABLE),1)
+	@echo "not notarized: the app is signed by $(SIGNED_BY), which the notary service cannot check."
+	@echo "Gatekeeper will refuse this archive on a machine that downloads it."
+else
+	@# --timeout: without one, a notary service that never answers hangs the release job for hours.
+	xcrun notarytool submit "$(ZIP)" $(NOTARY_AUTH) --wait --timeout 30m
+	xcrun stapler staple "$(STAGE)/$(APP_NAME).app"
+	@rm -f "$(ZIP)"
+	ditto -c -k --keepParent --sequesterRsrc "$(STAGE)/$(APP_NAME).app" "$(ZIP)"
+	xcrun stapler validate "$(STAGE)/$(APP_NAME).app"
+	spctl -a -vvv -t exec "$(STAGE)/$(APP_NAME).app"
+endif
 
 ## Clear the stale Accessibility grant after a rebuild, so macOS prompts again.
 reset-permission:

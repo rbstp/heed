@@ -29,17 +29,5 @@ public func warpPoint(
 
 private func visiblePart(of frame: CGRect, on screens: [CGRect]) -> CGRect {
     guard !screens.isEmpty else { return frame }
-
-    var best = CGRect.null
-    var bestArea: CGFloat = 0
-    for screen in screens {
-        let overlap = screen.intersection(frame)
-        guard !overlap.isNull else { continue }
-        let area = overlap.width * overlap.height
-        if area > bestArea {
-            bestArea = area
-            best = overlap
-        }
-    }
-    return best
+    return screens[screenIndex(for: frame, in: screens)].intersection(frame)
 }

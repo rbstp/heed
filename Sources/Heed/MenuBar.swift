@@ -86,7 +86,7 @@ final class MenuBarController: NSObject {
         // NSxxxFunctionKey table.
         if let shortcut, shortcut.key.count == 1 {
             toggle.keyEquivalent = shortcut.key
-            toggle.keyEquivalentModifierMask = MenuBarController.modifierMask(shortcut)
+            toggle.keyEquivalentModifierMask = shortcut.modifiers.appKitMask
         }
         menu.addItem(toggle)
 
@@ -170,15 +170,6 @@ final class MenuBarController: NSObject {
         }
         image.isTemplate = colour == nil
         return image
-    }
-
-    private static func modifierMask(_ spec: HotkeySpec) -> NSEvent.ModifierFlags {
-        var mask: NSEvent.ModifierFlags = []
-        if spec.modifiers.contains(.command) { mask.insert(.command) }
-        if spec.modifiers.contains(.control) { mask.insert(.control) }
-        if spec.modifiers.contains(.option) { mask.insert(.option) }
-        if spec.modifiers.contains(.shift) { mask.insert(.shift) }
-        return mask
     }
 
     @objc private func toggleFromMenu() {

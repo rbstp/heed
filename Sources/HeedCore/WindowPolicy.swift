@@ -37,11 +37,10 @@ public struct WindowCandidate: Sendable {
     public let size: CGSize?
     public let title: String?
     public let bundleID: String?
-    public let canActivate: Bool
 
     public init(
         role: String?, subrole: String?, isModal: Bool, isMinimized: Bool,
-        size: CGSize?, title: String?, bundleID: String?, canActivate: Bool
+        size: CGSize?, title: String?, bundleID: String?
     ) {
         self.role = role
         self.subrole = subrole
@@ -50,7 +49,6 @@ public struct WindowCandidate: Sendable {
         self.size = size
         self.title = title
         self.bundleID = bundleID
-        self.canActivate = canActivate
     }
 }
 
@@ -132,8 +130,6 @@ public func evaluate(_ candidate: WindowCandidate, policy: WindowPolicy) -> Wind
     if size.width < policy.minimumSize || size.height < policy.minimumSize {
         return .reject("too small (\(Int(size.width))x\(Int(size.height)))")
     }
-
-    guard candidate.canActivate else { return .reject("the app cannot be activated") }
 
     if let bundleID = candidate.bundleID, policy.excludedBundleIDs.contains(bundleID) {
         return .reject("excluded \(bundleID)")

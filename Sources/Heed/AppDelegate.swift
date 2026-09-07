@@ -1,7 +1,8 @@
 import AppKit
 import HeedCore
 
-/// receives these directly, so a Raycast Quicklink needs no second process and no IPC.
+/// The `heed://` URL scheme. A running LSUIElement app receives these directly, so a Raycast
+/// Quicklink needs no second process and no IPC.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let agent: Agent
 

@@ -94,3 +94,18 @@ extension Target: Equatable {
         }
     }
 }
+
+/// A live element as a `Target`, so the identity rule in `Target ==` is the only one there is. Only
+/// the fields that rule reads are filled in.
+func windowTarget(_ element: AXUIElement, pid: pid_t) -> Target {
+    Target(pid: pid, window: element, bundleID: nil, frame: axFrame(element) ?? .null,
+           title: axString(element, kAXTitleAttribute), describedAs: "")
+}
+
+/// Whether a live element is the window a `Target` names. `CFEqual` first: it answers for most
+/// windows without the two reads behind it.
+func sameWindow(_ element: AXUIElement, as target: Target) -> Bool {
+    guard let window = target.window else { return false }
+    if CFEqual(element, window) { return true }
+    return windowTarget(element, pid: target.pid) == target
+}

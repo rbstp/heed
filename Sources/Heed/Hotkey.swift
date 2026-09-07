@@ -20,17 +20,12 @@ final class Hotkey {
 
         guard Hotkey.installHandler() else { return nil }
 
-        var carbonModifiers: UInt32 = 0
-        if spec.modifiers.contains(.command) { carbonModifiers |= UInt32(cmdKey) }
-        if spec.modifiers.contains(.control) { carbonModifiers |= UInt32(controlKey) }
-        if spec.modifiers.contains(.option) { carbonModifiers |= UInt32(optionKey) }
-        if spec.modifiers.contains(.shift) { carbonModifiers |= UInt32(shiftKey) }
-
         // Exclusive: a non-exclusive registration succeeds alongside another app's, and then both
         // actions run on every press. Refusal is something that can be reported.
         let identifier = EventHotKeyID(signature: OSType(0x68_65_65_64), id: id)   // 'heed'
         let registered = RegisterEventHotKey(
-            UInt32(spec.keyCode), carbonModifiers, identifier, GetApplicationEventTarget(),
+            UInt32(spec.keyCode), spec.modifiers.carbonMask, identifier,
+            GetApplicationEventTarget(),
             UInt32(kEventHotKeyExclusive), &reference
         )
         guard registered == noErr, reference != nil else {

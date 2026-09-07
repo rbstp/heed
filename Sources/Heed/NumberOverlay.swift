@@ -4,8 +4,6 @@ import HeedCore
 /// One panel per badge rather than one sheet per screen: a panel is placed in global coordinates
 /// without caring which display a window is on, and there are never more than nine. Main thread
 /// only; `Agent` hops to it explicitly.
-/// One panel per badge: a panel is placed in global coordinates without caring which display a
-/// window is on, and there are never more than nine. Main thread only.
 final class NumberOverlay {
     private static let side: CGFloat = 56
 

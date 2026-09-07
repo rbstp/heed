@@ -127,12 +127,11 @@ final class WindowPolicyTests: XCTestCase {
         isMinimized: Bool = false,
         size: CGSize? = CGSize(width: 800, height: 600),
         title: String? = "Document",
-        bundleID: String? = "com.example.App",
-        canActivate: Bool = true
+        bundleID: String? = "com.example.App"
     ) -> WindowCandidate {
         WindowCandidate(
             role: role, subrole: subrole, isModal: isModal, isMinimized: isMinimized,
-            size: size, title: title, bundleID: bundleID, canActivate: canActivate
+            size: size, title: title, bundleID: bundleID
         )
     }
 
@@ -188,10 +187,6 @@ final class WindowPolicyTests: XCTestCase {
         XCTAssertNotEqual(evaluate(candidate(size: CGSize(width: 300, height: 20)), policy: policy), .accept)
         XCTAssertNotEqual(evaluate(candidate(size: nil), policy: policy), .accept)
         XCTAssertEqual(evaluate(candidate(size: CGSize(width: 40, height: 40)), policy: policy), .accept)
-    }
-
-    func testAppsThatCannotBeActivatedAreRejected() {
-        XCTAssertNotEqual(evaluate(candidate(canActivate: false), policy: WindowPolicy()), .accept)
     }
 
     func testExcludedBundlesAreRejected() {

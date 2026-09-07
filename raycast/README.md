@@ -26,7 +26,8 @@ stacking, so stepping through does not reorder what you are stepping through.
 
 ## Requirements
 
-Heed 0.9.0 or later with Accessibility permission granted:
+Heed 0.12.0 or later with Accessibility permission granted. 0.12.0 is the first signed and
+notarized build, so Gatekeeper opens it without a detour through System Settings:
 
 ```sh
 brew install --cask rbstp/tap/heed

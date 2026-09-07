@@ -1,6 +1,6 @@
 import AppKit
-import FFMCore
 import Foundation
+import HeedCore
 
 /// `XPC_SERVICE_NAME` is launchd's own answer to which job this is; the bundle and path are the same
 /// whether launchd or a hand launch started the installed app.

@@ -1,5 +1,5 @@
 import AppKit
-import FFMCore
+import HeedCore
 
 /// The menu bar item. Main thread only; `Agent` hops to it explicitly.
 final class MenuBarController: NSObject {
@@ -7,7 +7,10 @@ final class MenuBarController: NSObject {
     private let onClick: () -> Void
     private let onQuit: () -> Void
     private let onChooseModifier: (ModifierPreset) -> Void
+    private let onToggleNumbers: () -> Void
     private var state = MenuBarState(enabled: true, trusted: true)
+    /// Whether the window numbers are switched on, for the check beside the menu item.
+    var showsNumbers = true
     /// The toggle hotkey, shown beside the menu item. Nil when none is registered.
     var shortcut: HotkeySpec?
     /// The modifier every shortcut is registered under. Nil when nothing is registered, or when it
@@ -18,12 +21,14 @@ final class MenuBarController: NSObject {
     init(
         onClick: @escaping () -> Void,
         onQuit: @escaping () -> Void,
-        onChooseModifier: @escaping (ModifierPreset) -> Void
+        onChooseModifier: @escaping (ModifierPreset) -> Void,
+        onToggleNumbers: @escaping () -> Void
     ) {
         dispatchPrecondition(condition: .onQueue(.main))
         self.onClick = onClick
         self.onQuit = onQuit
         self.onChooseModifier = onChooseModifier
+        self.onToggleNumbers = onToggleNumbers
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -94,6 +99,14 @@ final class MenuBarController: NSObject {
         modifier.submenu = modifierMenu()
         menu.addItem(modifier)
 
+        let numbers = NSMenuItem(title: "Show Window Numbers",
+                                 action: #selector(toggleNumbersFromMenu), keyEquivalent: "")
+        numbers.target = self
+        numbers.state = showsNumbers ? .on : .off
+        numbers.toolTip = "Number the windows while the shortcut modifier is held, so the window "
+            + "to switch to can be read off the screen."
+        menu.addItem(numbers)
+
         let log = NSMenuItem(title: "Open Log", action: #selector(openLog), keyEquivalent: "")
         log.target = self
         menu.addItem(log)
@@ -146,24 +159,26 @@ final class MenuBarController: NSObject {
     }
 
     private func showImage(colour: NSColor? = nil) {
-        item.button?.image = MenuBarController.symbol(state.symbolName, colour: colour)
+        item.button?.image = MenuBarController.mark(state.glyph, colour: colour)
     }
 
-    /// The symbol as AppKit ships it, at the size and alignment it means for a menu bar; sizing it
-    /// by hand leaves the alignment rect behind and the glyph is drawn off centre and clipped. A
-    /// template unless coloured; a template is a mask, so the flash colour has to be drawn into the
-    /// image rather than tinted onto it.
-    private static func symbol(_ name: String, colour: NSColor?) -> NSImage {
-        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else {
-            return NSImage()
+    /// Heed's mark at menu bar size. 18 points is what AppKit sizes a status item symbol to, and the
+    /// glyph's proportions are ninths, so every straight edge lands on a whole pixel at 1x.
+    ///
+    /// A template unless coloured; a template is a mask, so the flash colour has to be drawn into
+    /// the image rather than tinted onto it. The drawing handler runs again per backing scale, so
+    /// the same call is right on a Retina display and on a 1x one.
+    private static func mark(_ glyph: Glyph, colour: NSColor?) -> NSImage {
+        let side: CGFloat = 18
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.addPath(glyphPath(glyph, side: side))
+            context.setFillColor((colour ?? .black).cgColor)
+            context.fillPath()
+            return true
         }
-        guard let colour else {
-            image.isTemplate = true
-            return image
-        }
-        let coloured = image.withSymbolConfiguration(.init(paletteColors: [colour])) ?? image
-        coloured.isTemplate = false
-        return coloured
+        image.isTemplate = colour == nil
+        return image
     }
 
     private static func modifierMask(_ spec: HotkeySpec) -> NSEvent.ModifierFlags {
@@ -177,6 +192,10 @@ final class MenuBarController: NSObject {
 
     @objc private func toggleFromMenu() {
         onClick()
+    }
+
+    @objc private func toggleNumbersFromMenu() {
+        onToggleNumbers()
     }
 
     @objc private func quitFromMenu() {

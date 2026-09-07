@@ -1,5 +1,5 @@
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 final class MenuBarStateTests: XCTestCase {
     func testBrightOnlyWhenItCanActuallyWork() {
@@ -38,10 +38,9 @@ final class MenuBarStateTests: XCTestCase {
     }
 
     /// Dimming alone cannot say on or off, since it also means "no permission".
-    func testSymbolShowsTheSwitchPosition() {
-        XCTAssertEqual(MenuBarState(enabled: true, trusted: false).symbolName,
-                       "cursorarrow.motionlines")
-        XCTAssertEqual(MenuBarState(enabled: false, trusted: true).symbolName, "cursorarrow")
+    func testGlyphShowsTheSwitchPosition() {
+        XCTAssertEqual(MenuBarState(enabled: true, trusted: false).glyph, .attending)
+        XCTAssertEqual(MenuBarState(enabled: false, trusted: true).glyph, .idle)
     }
 
     func testToggleTitleOffersTheOppositeState() {

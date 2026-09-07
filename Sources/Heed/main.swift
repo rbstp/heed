@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
-import FFMCore
 import Foundation
+import HeedCore
 
 func accessibilityTrusted(prompt: Bool) -> Bool {
     let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String

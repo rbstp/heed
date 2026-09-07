@@ -5,16 +5,15 @@ public struct MenuBarState: Equatable, Sendable {
     public let label: String
     public let tooltip: String
     public let toggleTitle: String
-    /// The menu bar glyph: a pointer trailing motion lines while on, a plain pointer while off, so
-    /// the switch position shows by shape as well as by dimming, which also means "no permission".
-    /// Both keep the pointer itself full size, which is all a 1x display has the pixels to draw.
-    public let symbolName: String
+    /// The menu bar mark: brackets holding a core while on, empty brackets while off, so the switch
+    /// position shows by shape as well as by dimming, which also means "no permission".
+    public let glyph: Glyph
 
     public init(enabled: Bool, trusted: Bool) {
         dimmed = !(enabled && trusted)
         label = "Heed, \(enabled ? "on" : "off")"
         toggleTitle = enabled ? "Turn Heed Off" : "Turn Heed On"
-        symbolName = enabled ? "cursorarrow.motionlines" : "cursorarrow"
+        glyph = enabled ? .attending : .idle
 
         var help = enabled
             ? "Heed is on. Click to turn it off."

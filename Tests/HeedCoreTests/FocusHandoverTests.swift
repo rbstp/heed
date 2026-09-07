@@ -1,6 +1,6 @@
 import CoreGraphics
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 /// Where the pointer sits for every test that is not about the pointer moving, and the window
 /// server's number for the window "A" it sits on.

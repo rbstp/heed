@@ -1,5 +1,5 @@
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 private final class Harness {
     var machine: DwellMachine<String>

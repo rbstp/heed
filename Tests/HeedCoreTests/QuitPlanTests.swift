@@ -1,5 +1,5 @@
 import XCTest
-@testable import FFMCore
+@testable import HeedCore
 
 final class QuitPlanTests: XCTestCase {
     private let label = "io.github.rbstp.heed"

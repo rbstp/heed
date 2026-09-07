@@ -7,17 +7,25 @@ let package = Package(
     targets: [
         // Pure state machine: no Accessibility, no AppKit. Unit-testable in isolation.
         .target(
-            name: "FFMCore",
+            name: "HeedCore",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
             name: "Heed",
-            dependencies: ["FFMCore"],
+            dependencies: ["HeedCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // Renders the iconset. Shares `HeedCore.glyphPath` with the menu bar, so the app icon and
+        // the status item can never drift apart.
+        .executableTarget(
+            name: "heed-icon",
+            dependencies: ["HeedCore"],
+            path: "Sources/IconTool",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "FFMCoreTests",
-            dependencies: ["FFMCore"],
+            name: "HeedCoreTests",
+            dependencies: ["HeedCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

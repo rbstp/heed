@@ -1,5 +1,5 @@
 import Carbon
-import FFMCore
+import HeedCore
 
 /// A system-wide hotkey, held for as long as this object lives.
 ///

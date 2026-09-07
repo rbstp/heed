@@ -2,7 +2,6 @@ import Foundation
 import HeedCore
 
 let bundleID = "io.github.rbstp.heed"
-/// Distributed notification a second copy of the binary posts to reach the running agent.
 let commandNotification = "\(bundleID).command"
 
 struct Config {
@@ -13,21 +12,16 @@ struct Config {
     // a Carbon hotkey takes the combination away system-wide.
     var focusNextHotkey = "cmd+ctrl+right"
     var focusPreviousHotkey = "cmd+ctrl+left"
-    /// Window 1; the same modifiers with 2 to 9 reach the others. See `Agent.combinations`.
     var focusWindowHotkey = "cmd+ctrl+1"
     /// Off by default: four more exclusive grabs nobody asked for would be hostile.
     var focusLeftHotkey = ""
     var focusRightHotkey = ""
     var focusUpHotkey = ""
     var focusDownHotkey = ""
-    /// Put the ring numbers on the windows while the numbered shortcuts' modifier is held, so the
-    /// digit to press can be read off the screen rather than counted.
     var windowNumbers = true
-    /// How long the modifier has to be held first. Short enough to feel immediate, long enough that
-    /// the modifier of a shortcut typed at speed is back up before anything is drawn.
+    /// Long enough that a shortcut typed at speed is over before anything is drawn.
     var windowNumbersDelayMs = 100
-    /// Move the pointer into a window that took focus without it. Off by default: a cursor that
-    /// jumps unasked is worse than one left behind.
+    /// Off by default: a cursor that jumps unasked is worse than one left behind.
     var warpPointer = false
     var warpX = 50
     var warpY = 50
@@ -60,7 +54,6 @@ struct Config {
 
     var dwell: Double { Double(dwellMs) / 1000 }
     var poll: Double { Double(pollMs) / 1000 }
-    /// Never faster than `poll`.
     var idlePoll: Double { max(Double(idlePollMs) / 1000, poll) }
     var typingCooldown: Double { Double(typingCooldownMs) / 1000 }
     var clickGrace: Double { Double(clickGraceMs) / 1000 }
@@ -68,8 +61,6 @@ struct Config {
     var windowNumbersDelay: Double { Double(windowNumbersDelayMs) / 1000 }
     var verifyTimeout: Double { Double(verifyTimeoutMs) / 1000 }
 
-    /// Overlay and transient-chrome apps the pointer would otherwise chase. Mission Control and
-    /// Launchpad are drawn by the Dock.
     static let builtinExclusions: Set<String> = [
         bundleID,
         "com.apple.dock",
@@ -84,7 +75,6 @@ struct Config {
         "com.lwouis.alt-tab-macos",
     ]
 
-    /// Outlook's meeting reminder is structurally indistinguishable from a document window (subrole
     /// AXStandardWindow, minimize and zoom buttons), so it is matched on its exact titles. English and
     /// French only; another locale needs an `excludedWindowTitles` entry.
     static let builtinTitleExclusions: [(bundleID: String?, pattern: String)] = [
@@ -95,8 +85,8 @@ struct Config {
         PromptRule(bundleID: "com.apple.finder", identifier: "Progress"),
     ]
 
-    /// Installed, the main bundle identifier already is the domain and a suite name of your own
-    /// bundle identifier is rejected by Foundation. As a bare binary the suite is what finds it.
+    /// Installed, the bundle identifier already is the domain, and Foundation rejects a suite name
+    /// matching your own. As a bare binary the suite is what finds it.
     static func store() -> UserDefaults {
         if Bundle.main.bundleIdentifier == bundleID {
             return .standard

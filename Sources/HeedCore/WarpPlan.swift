@@ -1,9 +1,6 @@
 import CoreGraphics
 import Foundation
 
-/// Where the pointer should land inside a window that just took keyboard focus. Global top-left
-/// coordinates, the space Accessibility, `CGDisplayBounds` and `CGWarpMouseCursorPosition` share.
-///
 /// Nil leaves the pointer alone: no frame, the pointer already inside the window, or nothing of the
 /// window on any display. The percentages are read against the window, then clamped a couple of
 /// pixels inside the part of it a display shows.
@@ -30,8 +27,6 @@ public func warpPoint(
     return CGPoint(x: min(max(x, safe.minX), safe.maxX), y: min(max(y, safe.minY), safe.maxY))
 }
 
-/// The part of a window the display showing most of it can show. No displays reported means nothing
-/// to clamp against, so the frame stands; overlapping none of them is off the world.
 private func visiblePart(of frame: CGRect, on screens: [CGRect]) -> CGRect {
     guard !screens.isEmpty else { return frame }
 

@@ -1,21 +1,15 @@
 import Foundation
 
-/// Something another program can ask a running Heed to do, behind both the `heed://` URL scheme
-/// and the command-line flags, so the two cannot drift apart.
 public enum HeedCommand: Equatable, Sendable {
     case toggle
     case enable
     case disable
-    /// One step around the focus ring; forward for a positive delta.
     case focusStep(Int)
-    /// A window by its place in ring order.
     case focusNumber(Int)
     /// A window by the number the window server gives it, which survives the ring being rebuilt.
     case focusWindowID(Int)
     case focusDirection(FocusDirection)
 
-    /// The wire form, `focus/next` or `toggle`. `parseCommand` reads back every command it can
-    /// produce; a number outside what it accepts does not survive the round trip.
     public var written: String {
         switch self {
         case .toggle: "toggle"
@@ -29,12 +23,10 @@ public enum HeedCommand: Equatable, Sendable {
     }
 }
 
-/// Parse `toggle` or `focus/next`: the wire form, and the tail of a `heed://` URL.
 public func parseCommand(_ text: String) -> HeedCommand? {
     parseCommand(path: text.split(separator: "/").map(String.init))
 }
 
-/// Parse a command from its path segments. Case and surrounding space do not matter.
 public func parseCommand(path: [String]) -> HeedCommand? {
     let segments = path
         .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
@@ -73,21 +65,16 @@ private func parseFocus(_ what: String) -> HeedCommand? {
     return number(what, upTo: 999).map { .focusNumber($0) }
 }
 
-/// The command a `heed://` URL asks for: `heed://focus/next`, `heed://toggle`.
 public func parseCommand(host: String?, path: String) -> HeedCommand? {
     parseCommand(path: [host ?? ""] + path.split(separator: "/").map(String.init))
 }
 
-/// What a command line asks of a running Heed.
 public enum CommandLineRequest: Equatable, Sendable {
-    /// No flag asked for anything; start normally.
     case none
     case command(HeedCommand)
     case unknown(String)
 }
 
-/// Read `--toggle`, `--on`, `--off`, `--focus <what>` off a command line. The first argument is the
-/// executable, and `--probe` is the caller's own business: it never reaches here.
 public func commandLineRequest(_ arguments: [String]) -> CommandLineRequest {
     let arguments = arguments.dropFirst()
     guard let index = arguments.firstIndex(where: { $0.hasPrefix("--") }) else { return .none }
@@ -98,8 +85,6 @@ public func commandLineRequest(_ arguments: [String]) -> CommandLineRequest {
     return .command(command)
 }
 
-/// A positive number written in plain digits. `Int` alone would take a sign, spaces, and digits
-/// from scripts nothing here produces.
 private func number(_ text: String, upTo limit: Int) -> Int? {
     guard !text.isEmpty, text.allSatisfy({ $0.isASCII && $0.isNumber }), let value = Int(text),
           (1...limit).contains(value)

@@ -116,7 +116,6 @@ final class WarpPlanTests: XCTestCase {
                        CGPoint(x: 500, y: -600))
     }
 
-    /// Nothing to clamp against is not the same as nowhere to go.
     func testWithNoDisplaysReportedTheWindowItselfIsTheBounds() {
         let window = CGRect(x: 100, y: 100, width: 800, height: 600)
         XCTAssertEqual(point(window, pointer: CGPoint(x: 9_000, y: 9_000), screens: []),

@@ -55,7 +55,6 @@ func axSet(_ element: AXUIElement, _ attribute: String, _ value: CFTypeRef) -> A
     AXUIElementSetAttributeValue(element, attribute as CFString, value)
 }
 
-/// Settability is per element, not per role: `AXFocused` is writable on some windows and not others.
 func axIsSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
     var settable: DarwinBoolean = false
     guard AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success else { return false }
@@ -68,13 +67,10 @@ func axPid(_ element: AXUIElement) -> pid_t? {
     return pid
 }
 
-/// A window the pointer is over and the app that owns it. `window` is nil for the app-level
-/// fallback used when an app exposes no usable Accessibility tree.
 struct Target {
     let pid: pid_t
     let window: AXUIElement?
     let bundleID: String?
-    /// Captured at hit-test time; `.null` when the window reports no position.
     let frame: CGRect
     let title: String?
     let describedAs: String

@@ -1,6 +1,5 @@
 import Foundation
 
-/// A key combination parsed from the string a user types into `defaults write`.
 public struct HotkeySpec: Hashable, Sendable {
     /// Declared in the order macOS displays them: ⌃⌥⇧⌘.
     public enum Modifier: String, Sendable, CaseIterable {
@@ -28,14 +27,11 @@ public struct HotkeySpec: Hashable, Sendable {
     }
 
     public let modifiers: Set<Modifier>
-    /// A `kVK_*` constant, transcribed so this module stays free of platform frameworks.
     public let keyCode: UInt16
-    /// The canonical key name, lowercase: "h", "f5", "space".
     public let key: String
 
-    /// Parses forms like `cmd+ctrl+h`, `Command-Control-H`, `⌘⌃H`. Nil unless there is exactly one
-    /// key and at least one modifier other than shift: `shift+a` is how a capital A is typed, and a
-    /// hotkey with no real modifier would swallow that key system-wide.
+    /// Nil unless there is exactly one key and a modifier other than shift: `shift+a` is how a
+    /// capital A is typed, and a hotkey with no real modifier would swallow that key system-wide.
     public init?(_ text: String) {
         var normalized = text.lowercased()
         for modifier in Modifier.allCases {
@@ -70,31 +66,26 @@ public struct HotkeySpec: Hashable, Sendable {
         self.keyCode = keyCode
     }
 
-    /// Whether a setting names no hotkey at all: empty, or "none".
     public static func isOff(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty || trimmed.lowercased() == "none"
     }
 
-    /// The same key under different modifiers, or nil when that would not be a legal hotkey.
     public func withModifiers(_ modifiers: Set<Modifier>) -> HotkeySpec? {
         guard HotkeySpec.isChord(modifiers) else { return nil }
         return HotkeySpec(modifiers: modifiers, key: key, keyCode: keyCode)
     }
 
-    /// The same modifiers with another key, or nil when the key is not one this knows.
     public func withKey(_ key: String) -> HotkeySpec? {
         let name = HotkeySpec.keyAliases[key.lowercased()] ?? key.lowercased()
         guard let code = HotkeySpec.keyCodes[name] else { return nil }
         return HotkeySpec(modifiers: modifiers, key: name, keyCode: code)
     }
 
-    /// The form `defaults write` takes: `ctrl+alt+shift+cmd+h`.
     public var written: String {
         (modifiers.ordered.map(\.written) + [key]).joined(separator: "+")
     }
 
-    /// The form macOS shows: `⌃⌥⇧⌘H`.
     public var display: String {
         modifiers.symbols + (key.count == 1 ? key.uppercased() : key.capitalized)
     }
@@ -136,8 +127,6 @@ extension Set where Element == HotkeySpec.Modifier {
     var symbols: String { ordered.map(\.symbol).joined() }
 }
 
-/// The first two claims on the same combination. Whichever is registered second is refused, and
-/// the refusal reads as another app holding it when the other holder is us.
 public func firstClash<Name>(
     in claims: [(name: Name, spec: HotkeySpec)]
 ) -> (earlier: Name, later: Name, spec: HotkeySpec)? {
@@ -149,8 +138,6 @@ public func firstClash<Name>(
     return nil
 }
 
-/// The modifier a set of settings counts as being under: `primary`'s, or the first that parses.
-/// What the menu ticks, and what it replaces.
 public func sharedModifiers(of texts: [String], primary: Int = 0) -> Set<HotkeySpec.Modifier> {
     let specs = texts.enumerated().compactMap { index, text in
         HotkeySpec(text).map { (index, $0) }
@@ -158,8 +145,6 @@ public func sharedModifiers(of texts: [String], primary: Int = 0) -> Set<HotkeyS
     return (specs.first { $0.0 == primary } ?? specs.first)?.1.modifiers ?? []
 }
 
-/// Move the settings under `base` onto `modifiers`, keeping each key, and leave the rest alone.
-///
 /// A setting deliberately given a different combination -- the directional shortcuts carry an extra
 /// Option -- must keep it: flattening everything onto one modifier puts two settings on the same
 /// combination as soon as any two share a key, which can never be registered.
@@ -172,8 +157,6 @@ public func rewriteHotkeys(
     }
 }
 
-/// Rewrite a hotkey setting under different modifiers, keeping its key. A setting that is off or
-/// does not parse is returned unchanged.
 public func rewriteHotkey(_ text: String, modifiers: Set<HotkeySpec.Modifier>) -> String {
     guard !HotkeySpec.isOff(text),
           let changed = HotkeySpec(text.trimmingCharacters(in: .whitespaces))?.withModifiers(modifiers)

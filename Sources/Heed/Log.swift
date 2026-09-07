@@ -1,7 +1,6 @@
 import Foundation
 import os
 
-/// stderr logging; the LaunchAgent redirects it to ~/Library/Logs/heed.log.
 enum Log {
     private static let verboseState = OSAllocatedUnfairLock(initialState: false)
     static var verbose: Bool {

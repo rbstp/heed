@@ -1,9 +1,7 @@
 import Carbon
 import HeedCore
 
-/// A system-wide hotkey, held for as long as this object lives.
-///
-/// Carbon rather than an `NSEvent` global monitor: it consumes the keystroke, and it needs no
+/// Carbon rather than an `NSEvent` global monitor: it consumes the keystroke and needs no
 /// Accessibility grant, so the switch works while Heed is still waiting for one. Main thread only.
 final class Hotkey {
     // One handler for the process: Carbon calls every handler installed for kEventHotKeyPressed and
@@ -15,7 +13,6 @@ final class Hotkey {
     private let id: UInt32
     private var reference: EventHotKeyRef?
 
-    /// Nil when the combination is already taken by another app.
     init?(spec: HotkeySpec, action: @escaping () -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
         id = Hotkey.nextID

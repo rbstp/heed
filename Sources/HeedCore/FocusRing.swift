@@ -5,7 +5,6 @@ import Foundation
 /// Accessibility reports positions in and `CGDisplayBounds` reports screens in.
 public struct RingWindow: Equatable, Sendable {
     public let frame: CGRect
-    /// Tie-breaker for windows sharing an origin; lower sorts first.
     public let key: Int
 
     public init(frame: CGRect, key: Int) {
@@ -14,8 +13,6 @@ public struct RingWindow: Equatable, Sendable {
     }
 }
 
-/// Ring order: screens left to right, then within each screen left to right, top to bottom.
-///
 /// Spatial rather than stacking order on purpose: focusing raises, so a stacking order would be
 /// rewritten by the act of stepping through it.
 public func ringOrder(_ windows: [RingWindow], screens: [CGRect]) -> [RingWindow] {
@@ -29,8 +26,6 @@ public func ringOrder(_ windows: [RingWindow], screens: [CGRect]) -> [RingWindow
         .map(\.window)
 }
 
-/// Whether at least a `minimum` by `minimum` patch of `frame` shows past the windows in front of it.
-///
 /// The window server calls a window on screen while it is completely buried. Subtracting covers one
 /// at a time gives an order-dependent answer, so the frame is cut into a grid along every cover edge
 /// and the uncovered cells are measured as a region.
@@ -66,7 +61,6 @@ public func isVisible(
         }
     }
 
-    // Widen a span of columns one at a time, and measure the tallest unbroken run of rows in it.
     for left in 0..<(x.count - 1) {
         var blocked = [Bool](repeating: false, count: y.count - 1)
         for right in (left + 1)..<x.count {
@@ -99,8 +93,6 @@ public func ringStart<Window: Equatable>(
     return aimed
 }
 
-/// Where a step of `delta` lands, wrapping at both ends. From nowhere, forward lands on the first
-/// window and backward on the last.
 public func ringStep(count: Int, from current: Int?, by delta: Int) -> Int? {
     guard count > 0 else { return nil }
     guard let current else { return delta >= 0 ? 0 : count - 1 }
@@ -108,8 +100,6 @@ public func ringStep(count: Int, from current: Int?, by delta: Int) -> Int? {
     return stepped < 0 ? stepped + count : stepped
 }
 
-/// The screen a window overlaps most, or the nearest by centre when it overlaps none. Never "no
-/// screen": a window dropped from the ring could not be reached at all.
 private func screenIndex(for frame: CGRect, in screens: [CGRect]) -> Int {
     guard !screens.isEmpty else { return 0 }
 
@@ -137,13 +127,10 @@ private func screenIndex(for frame: CGRect, in screens: [CGRect]) -> Int {
     return nearest
 }
 
-/// A direction the focus shortcuts can move in.
 public enum FocusDirection: String, Sendable, CaseIterable {
     case left, right, up, down
 }
 
-/// The window to focus when stepping out of `source` in `direction`, as an index into `windows`.
-///
 /// Candidates are the windows whose centre lies beyond the source centre along the axis. One
 /// overlapping the source across the axis beats one that does not; among equals the nearest wins,
 /// with `RingWindow.key` breaking ties. No wrapping: a dead end at the edge is information, and the

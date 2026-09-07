@@ -251,7 +251,6 @@ final class FocusHandoverTests: XCTestCase {
         XCTAssertEqual(decide(&handover, "B", pointerMoved: false, travelling: false, at: 0.0), .entered)
     }
 
-    /// Sub-threshold jitter must not turn "barely moved" into "settled somewhere else".
     func testTinyMovementDoesNotContestAnUnanchoredHold() {
         var handover = fresh()
         handover.sample(window: nil, hasFocus: nil, anchor: nil, number: nil, pointer: resting, owner: 100,
@@ -438,7 +437,6 @@ final class FocusHandoverTests: XCTestCase {
         XCTAssertTrue(handover.isHolding)
     }
 
-    /// A hold with nothing to anchor to must not be given a window to be exempt about.
     func testAnUnanchoredHoldIsNotGivenAWindowIdentity() {
         var handover = fresh()
         handover.sample(window: nil, hasFocus: nil, anchor: nil, number: windowA, pointer: resting,
@@ -475,7 +473,6 @@ final class FocusHandoverTests: XCTestCase {
         XCTAssertEqual(asked, 1)
     }
 
-    /// Two apps can hold at once, and only the one the pointer left is spent by leaving.
     func testLeavingOneAnchorDoesNotSpendAnother() {
         var handover = handedOver()
         handover.sample(window: "B", hasFocus: true, anchor: "B", number: windowB, pointer: resting,

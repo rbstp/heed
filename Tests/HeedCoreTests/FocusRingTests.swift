@@ -319,7 +319,6 @@ final class DirectionalStepTests: XCTestCase {
         XCTAssertEqual(step(from: source, .right, in: [nearer, sameRow]), 1)
     }
 
-    /// Nothing shares the row, so distance decides.
     func testWithNothingInTheRowTheNearestWindowWins() {
         let source = CGRect(x: 0, y: 400, width: 300, height: 200)
         let far = RingWindow(frame: CGRect(x: 1_200, y: 0, width: 300, height: 200), key: 2)

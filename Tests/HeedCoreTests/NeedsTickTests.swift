@@ -1,8 +1,6 @@
 import XCTest
 @testable import HeedCore
 
-/// Every case where `needsTick` wrongly reports false is a case where focus quietly stops following
-/// the pointer until something else happens.
 final class NeedsTickTests: XCTestCase {
     private func machine(dwell: Double = 0.2) -> DwellMachine<String> {
         DwellMachine<String>(dwell: dwell)

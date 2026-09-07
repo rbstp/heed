@@ -1,7 +1,4 @@
 // Renders the Heed app icon at a given size. Run: swift run heed-icon <size> <out.png>
-//
-// The same mark the menu bar item shows, white on a dark tile, so the two match. Drawn in code from
-// `HeedCore.glyphPath`, so the whole iconset is reproducible and cannot drift from the menu bar.
 
 import AppKit
 import HeedCore
@@ -33,8 +30,8 @@ let backdrop = NSGradient(
 )!
 backdrop.draw(in: NSBezierPath(roundedRect: tile, xRadius: radius, yRadius: radius), angle: -90)
 
-// Larger than a symbol's box would be: the mark reaches along the axes and leaves the corners
-// empty, so matching a square glyph's proportions would leave it looking lost on the tile.
+// The mark reaches along the axes and leaves the corners empty, so it needs more of the tile than
+// a square glyph would.
 let glyph = side * 0.66
 context.cgContext.translateBy(x: (side - glyph) / 2, y: (side - glyph) / 2)
 context.cgContext.addPath(glyphPath(.attending, side: glyph))

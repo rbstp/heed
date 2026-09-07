@@ -24,7 +24,6 @@ final class CommandTests: XCTestCase {
         XCTAssertEqual(parseCommand(path: ["TOGGLE"]), .toggle)
     }
 
-    /// A URL splits into a host and a path, which can leave empty segments behind.
     func testEmptySegmentsAreIgnored() {
         XCTAssertEqual(parseCommand(path: ["focus", "", "next"]), .focusStep(1))
         XCTAssertEqual(parseCommand("/toggle/"), .toggle)
@@ -66,7 +65,6 @@ final class CommandTests: XCTestCase {
         XCTAssertNil(parseCommand("focus/٣"), "digits the window list will never produce")
     }
 
-    /// The wire form and the parser are two halves of one thing.
     func testEveryCommandSurvivesTheRoundTrip() {
         let commands: [HeedCommand] = [
             .toggle, .enable, .disable, .focusStep(1), .focusStep(-1),
@@ -135,7 +133,6 @@ final class CommandFrontDoorTests: XCTestCase {
         XCTAssertEqual(commandLineRequest(["Heed", "--focus", "sideways"]), .unknown("--focus"))
     }
 
-    /// The first argument is the executable, whatever it happens to be called.
     func testTheExecutableNameIsNotAFlag() {
         XCTAssertEqual(commandLineRequest(["--toggle"]), CommandLineRequest.none)
     }

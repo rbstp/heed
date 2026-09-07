@@ -1,7 +1,7 @@
 import Foundation
 
 /// A key combination parsed from the string a user types into `defaults write`.
-public struct HotkeySpec: Equatable, Sendable {
+public struct HotkeySpec: Hashable, Sendable {
     /// Declared in the order macOS displays them: ⌃⌥⇧⌘.
     public enum Modifier: String, Sendable, CaseIterable {
         case control, option, shift, command
@@ -134,6 +134,47 @@ public struct HotkeySpec: Equatable, Sendable {
 extension Set where Element == HotkeySpec.Modifier {
     var ordered: [HotkeySpec.Modifier] { HotkeySpec.Modifier.allCases.filter(contains) }
     var symbols: String { ordered.map(\.symbol).joined() }
+}
+
+/// The first two claims that name the same combination, and who made them.
+///
+/// A combination belongs to one action, so a set holding a pair like this can never be registered
+/// whole: whichever is asked for second is refused, and the refusal reads as "another app has it"
+/// when the other holder is us. Finding the pair first means being able to name both sides.
+public func firstClash<Name>(in claims: [(name: Name, spec: HotkeySpec)]) -> (Name, Name)? {
+    var seen: [HotkeySpec: Name] = [:]
+    for claim in claims {
+        if let earlier = seen[claim.spec] { return (earlier, claim.name) }
+        seen[claim.spec] = claim.name
+    }
+    return nil
+}
+
+/// The modifier a set of hotkey settings counts as being under: the one `primary` names, or failing
+/// that the first setting that names any. Empty when none of them parses.
+///
+/// This is the modifier the menu shows a tick beside, and the one it replaces.
+public func sharedModifiers(of texts: [String], primary: Int = 0) -> Set<HotkeySpec.Modifier> {
+    let specs = texts.enumerated().compactMap { index, text in
+        HotkeySpec(text).map { (index, $0) }
+    }
+    return (specs.first { $0.0 == primary } ?? specs.first)?.1.modifiers ?? []
+}
+
+/// Move the settings that sit under `base` onto `modifiers`, keeping each key, and leave the rest
+/// exactly as they are.
+///
+/// Only the ones under `base` move, because a setting deliberately given a different combination --
+/// the directional shortcuts carry an extra Option out of the box -- must keep it. Flattening every
+/// setting onto one modifier puts two of them on the same key as soon as any two share a letter,
+/// and a combination belongs to one action, so the whole change is then impossible.
+public func rewriteHotkeys(
+    _ texts: [String], under base: Set<HotkeySpec.Modifier>, to modifiers: Set<HotkeySpec.Modifier>
+) -> [String] {
+    texts.map { text in
+        guard HotkeySpec(text)?.modifiers == base else { return text }
+        return rewriteHotkey(text, modifiers: modifiers)
+    }
 }
 
 /// Rewrite a hotkey setting under different modifiers, keeping its key. A setting that is off or

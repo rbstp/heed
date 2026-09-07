@@ -17,7 +17,10 @@ final class Agent {
 
     // Main thread only; `syncMenuBar` and `syncHotkey` are the hops from `queue`.
     private var menuBar: MenuBarController?
-    private var hotkeys: [Hotkey] = []
+    /// What each setting holds: the combination it was given, and the registrations keeping it. The
+    /// numbered shortcut keeps nine. Keyed by setting so a claim can tell a combination that is not
+    /// moving from one that is, which Carbon cannot be asked twice for.
+    private var registrations: [Shortcut: Registration] = [:]
     private var shortcut: HotkeySpec?
     private var numberOverlay: NumberOverlay?
     /// The modifier the numbered shortcuts are registered under, which is the one that raises the
@@ -377,54 +380,95 @@ final class Agent {
     private func syncHotkey() {
         let texts = shortcutTexts
         DispatchQueue.main.async { [self] in
-            hotkeys = []
+            registrations = [:]
             adopt(specs: [])
 
             let claimed = claim(texts)
-            hotkeys = claimed.held
+            registrations = claimed.held
             adopt(specs: claimed.specs)
             announce(specs: claimed.specs)
         }
     }
 
+    private struct Registration {
+        let spec: HotkeySpec
+        let keys: [Hotkey]
+    }
+
     /// Claim combinations without releasing the current registrations, so a change can be tried
     /// before the working shortcuts are given up. `specs` is in `Shortcut.allCases` order; `refused`
-    /// is only about combinations another app holds.
-    private func claim(_ texts: [String]) -> (held: [Hotkey], specs: [HotkeySpec?], refused: Bool) {
+    /// means a combination could not be had, whoever holds it.
+    private func claim(_ texts: [String]) -> (held: [Shortcut: Registration], specs: [HotkeySpec?],
+                                              refused: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
-        var held: [Hotkey] = []
-        var specs: [HotkeySpec?] = []
-        var refused = false
 
+        // Read the settings before anything is registered, so two of them asking for the same
+        // combination is caught as what it is rather than as Carbon refusing the second.
+        var specs: [HotkeySpec?] = []
+        var wanted: [Shortcut: [(HotkeySpec, () -> Void)]] = [:]
         for (shortcut, text) in zip(Shortcut.allCases, texts) {
             guard !HotkeySpec.isOff(text) else {
                 specs.append(nil)
                 continue
             }
-            let wanted = text.trimmingCharacters(in: .whitespaces)
-            guard let spec = HotkeySpec(wanted) else {
-                Log.note("hotkey \"\(wanted)\" is not a combination I understand "
+            let written = text.trimmingCharacters(in: .whitespaces)
+            guard let spec = HotkeySpec(written) else {
+                Log.note("hotkey \"\(written)\" is not a combination I understand "
                     + "(try cmd+ctrl+h); nothing \(shortcut.which)")
                 specs.append(nil)
                 continue
             }
             guard let combinations = combinations(for: shortcut, spec) else {
-                Log.note("hotkey \"\(wanted)\" must end in 1, the other digits follow; nothing \(shortcut.which)")
+                Log.note("hotkey \"\(written)\" must end in 1, the other digits follow; nothing \(shortcut.which)")
                 specs.append(nil)
                 continue
             }
-            var registered: [Hotkey] = []
+            wanted[shortcut] = combinations
+            specs.append(spec)
+        }
+
+        var refused = false
+
+        // A combination belongs to one action, so two settings naming the same one can never both
+        // be registered: the second is refused, and the refusal reads as another app holding it
+        // when the other holder is Heed. Found here instead, the later claim is dropped and both
+        // sides can be named. Dropped rather than the whole set abandoned, so a configuration
+        // written that way still starts with every other shortcut working; `refused` is what stops
+        // the modifier menu from applying a set it could only half move.
+        while true {
+            let claims = Shortcut.allCases.flatMap { shortcut in
+                (wanted[shortcut] ?? []).map { (name: shortcut, spec: $0.0) }
+            }
+            guard let (first, second) = firstClash(in: claims) else { break }
+            let combination = claims.first { $0.name == second }?.spec.display ?? "that combination"
+            Log.note("hotkey \(combination) already \(first.which), so nothing \(second.which)")
+            wanted[second] = nil
+            if let index = Shortcut.allCases.firstIndex(of: second) { specs[index] = nil }
+            refused = true
+        }
+
+        var held: [Shortcut: Registration] = [:]
+        for (index, shortcut) in Shortcut.allCases.enumerated() {
+            guard let combinations = wanted[shortcut], let spec = specs[index] else { continue }
+
+            // Carbon refuses a combination this process already holds, so a setting that is not
+            // moving keeps what it has rather than asking again and being turned down by itself.
+            if let standing = registrations[shortcut], standing.spec == spec {
+                held[shortcut] = standing
+                continue
+            }
+
+            var keys: [Hotkey] = []
             for (combination, action) in combinations {
                 guard let hotkey = Hotkey(spec: combination, action: action) else { break }
-                registered.append(hotkey)
+                keys.append(hotkey)
             }
-            guard registered.count == combinations.count else {
-                specs.append(nil)
+            guard keys.count == combinations.count else {
+                specs[index] = nil
                 refused = true   // Hotkey logs why; dropping the partial set unregisters it
                 continue
             }
-            held += registered
-            specs.append(spec)
+            held[shortcut] = Registration(spec: spec, keys: keys)
         }
         return (held, specs, refused)
     }
@@ -439,10 +483,15 @@ final class Agent {
         }
     }
 
+    /// Where the toggle sits in `Shortcut.allCases`, which is the order `claim` reports in.
+    private static let toggleIndex = Shortcut.allCases.firstIndex(of: .toggle) ?? 0
+
     private func adopt(specs: [HotkeySpec?]) {
-        shortcut = specs.first.flatMap { $0 }
+        shortcut = specs.indices.contains(Agent.toggleIndex) ? specs[Agent.toggleIndex] : nil
         menuBar?.shortcut = shortcut
-        menuBar?.modifiers = specs.compactMap { $0 }.first?.modifiers
+        // The tick goes beside the modifier the menu would replace, which is the one the toggle is
+        // under whenever it is registered.
+        menuBar?.modifiers = shortcut?.modifiers ?? specs.compactMap { $0 }.first?.modifiers
         // The numbers stand for the numbered shortcuts, so they follow that setting's modifier
         // rather than the toggle's: the two need not be the same, and only one is being pictured.
         let numbered = Shortcut.allCases.firstIndex(of: .focusWindow)
@@ -451,15 +500,21 @@ final class Agent {
         hideNumbers()
     }
 
-    /// Put every shortcut under a different modifier, keeping each key. All or none, and stored only
+    /// Put the shortcuts under a different modifier, keeping each key. All or none, and stored only
     /// once it took. `report` is called on the main thread.
+    ///
+    /// Only the settings already under the modifier being replaced move. One deliberately given a
+    /// different combination -- the directional shortcuts carry an extra Option out of the box --
+    /// keeps it, rather than being flattened onto the modifier every other shortcut just took and
+    /// landing on a key one of them already has.
     func changeModifiers(to preset: ModifierPreset, report: @escaping (Bool) -> Void) {
         queue.async { [self] in
             let current = shortcutTexts
-            let texts = current.map { rewriteHotkey($0, modifiers: preset.modifiers) }
+            let under = sharedModifiers(of: current, primary: Agent.toggleIndex)
+            let texts = rewriteHotkeys(current, under: under, to: preset.modifiers)
 
-            // Compared as combinations: the stored text is however it was typed, the rewrite is
-            // canonical, and Carbon refuses a combination this process already holds.
+            // Compared as combinations: the stored text is however it was typed and the rewrite is
+            // canonical, so a setting that did not move must not read as one that did.
             guard !zip(current, texts).allSatisfy({ HotkeySpec($0) == HotkeySpec($1) }) else {
                 DispatchQueue.main.async { report(true) }
                 return
@@ -468,11 +523,11 @@ final class Agent {
             DispatchQueue.main.async { [self] in
                 let claimed = claim(texts)
                 guard !claimed.refused else {
-                    Log.note("keeping the current shortcuts: \(preset.display) is not free")
+                    Log.note("keeping the current shortcuts: \(preset.display) could not be had")
                     report(false)
                     return
                 }
-                hotkeys = claimed.held
+                registrations = claimed.held
                 adopt(specs: claimed.specs)
                 announce(specs: claimed.specs)
 

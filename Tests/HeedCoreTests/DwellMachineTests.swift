@@ -8,6 +8,9 @@ private final class Harness {
     var focused: String?
     var hitTestCalls = 0
     var focusCheckCalls = 0
+    var confirmCalls = 0
+    /// Nil makes `confirm` refuse; otherwise it stands in for the element a re-read would return.
+    var confirmsAs: ((String) -> String?)?
 
     init(dwell: Double = 0.2) {
         machine = DwellMachine(dwell: dwell)
@@ -26,6 +29,11 @@ private final class Harness {
             isAlreadyFocused: {
                 self.focusCheckCalls += 1
                 return self.focused == $0
+            },
+            confirm: { candidate in
+                self.confirmCalls += 1
+                guard let confirmsAs = self.confirmsAs else { return candidate }
+                return confirmsAs(candidate)
             }
         )
     }
@@ -34,6 +42,102 @@ private final class Harness {
 }
 
 final class DwellMachineTests: XCTestCase {
+
+    // MARK: - Confirmation
+
+    /// Confirmed even at dwell 0: `isAlreadyFocused` runs in between and reads Accessibility
+    /// whenever the target's app is already frontmost, which is time enough for the window to go.
+    func testAFreshlyHitTestedCandidateIsStillConfirmed() {
+        let harness = Harness(dwell: 0)
+        harness.underCursor = "A"
+        XCTAssertEqual(harness.tick(moved: true), "A")
+        XCTAssertEqual(harness.confirmCalls, 1)
+    }
+
+    func testACandidateThatMaturedAcrossTicksIsConfirmed() {
+        let harness = Harness(dwell: 0.2)
+        harness.underCursor = "A"
+        harness.tick(moved: true)
+        harness.advance(0.3)
+        XCTAssertEqual(harness.tick(moved: false), "A")
+        XCTAssertEqual(harness.confirmCalls, 1)
+    }
+
+    func testConfirmIsNotCalledWhenNoCandidateFires() {
+        let harness = Harness(dwell: 0.2)
+        harness.underCursor = "A"
+        for _ in 0..<10 { harness.tick(moved: false) }
+        XCTAssertEqual(harness.confirmCalls, 0)
+    }
+
+    /// An already-focused target must not cost a re-read either.
+    func testConfirmIsNotCalledWhenTheTargetIsAlreadyFocused() {
+        let harness = Harness(dwell: 0.2)
+        harness.underCursor = "A"
+        harness.focused = "A"
+        harness.tick(moved: true)
+        harness.advance(0.3)
+        XCTAssertNil(harness.tick(moved: false))
+        XCTAssertEqual(harness.confirmCalls, 0)
+    }
+
+    func testARefusedConfirmationYieldsNothing() {
+        let harness = Harness(dwell: 0.2)
+        harness.underCursor = "A"
+        harness.confirmsAs = { _ in nil }
+        harness.tick(moved: true)
+        harness.advance(0.3)
+        XCTAssertNil(harness.tick(moved: false))
+        XCTAssertEqual(harness.confirmCalls, 1)
+    }
+
+    func testARefusedConfirmationLeavesTheLoopBusy() {
+        let harness = Harness(dwell: 0.2)
+        harness.underCursor = "A"
+        harness.confirmsAs = { _ in nil }
+        harness.tick(moved: true)
+        harness.advance(0.3)
+        harness.tick(moved: false)
+        XCTAssertTrue(harness.machine.needsTick)
+    }
+
+    /// The forced test the internal invalidation arms, so a refusal is retried without the cursor
+    /// having to move again.
+    func testARefusedConfirmationForcesTheNextHitTest() {
+        let harness = Harness(dwell: 0.2)
+        harness.underCursor = "A"
+        harness.confirmsAs = { _ in nil }
+        harness.tick(moved: true)
+        harness.advance(0.3)
+        harness.tick(moved: false)
+        let before = harness.hitTestCalls
+        harness.tick(moved: false)
+        XCTAssertEqual(harness.hitTestCalls, before + 1)
+    }
+
+    /// One window can report a different element after a dwell, so the machine hands back what the
+    /// re-read found rather than the candidate it was holding.
+    func testTheConfirmedElementIsWhatIsReturned() {
+        let harness = Harness(dwell: 0.2)
+        harness.underCursor = "A"
+        harness.confirmsAs = { _ in "A-refreshed" }
+        harness.tick(moved: true)
+        harness.advance(0.3)
+        XCTAssertEqual(harness.tick(moved: false), "A-refreshed")
+    }
+
+    func testConfirmFiresOncePerEmissionNotPerTick() {
+        let harness = Harness(dwell: 0.2)
+        harness.underCursor = "A"
+        harness.tick(moved: true)
+        harness.advance(0.05)
+        harness.tick(moved: false)
+        harness.advance(0.05)
+        harness.tick(moved: false)
+        harness.advance(0.2)
+        XCTAssertEqual(harness.tick(moved: false), "A")
+        XCTAssertEqual(harness.confirmCalls, 1)
+    }
 
     // MARK: - Expiry
 

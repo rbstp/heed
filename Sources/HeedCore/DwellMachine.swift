@@ -19,12 +19,23 @@ public struct DwellMachine<Target: Equatable> {
 
     public var needsTick: Bool { candidate != nil || forceHitTest }
 
+    /// No closure passed here may touch the machine. A nested `invalidate()` is an exclusivity
+    /// violation that traps at runtime in every build rather than failing to compile.
+    ///
+    /// `confirm` re-reads the candidate at the instant focus would apply and hands back what it
+    /// found, rather than a yes: for one window an element a dwell old can be a different element,
+    /// so the caller needs the fresh one. Nil discards the candidate and arms the next hit test.
+    ///
+    /// It runs even for a candidate this call hit-tested. `isAlreadyFocused` sits in between and
+    /// reads Accessibility whenever the target's app is already frontmost, which is time enough
+    /// for the window to have gone.
     public mutating func tick(
         now: Double,
         condition: TickCondition,
         cursorMoved: Bool,
         hitTest: () -> Target?,
-        isAlreadyFocused: (Target) -> Bool
+        isAlreadyFocused: (Target) -> Bool,
+        confirm: (Target) -> Target?
     ) -> Target? {
         guard condition == .normal else {
             invalidate()
@@ -45,7 +56,12 @@ public struct DwellMachine<Target: Equatable> {
 
         guard let pending = candidate, now - candidateSince >= dwell else { return nil }
         candidate = nil
-        return isAlreadyFocused(pending) ? nil : pending
+        guard !isAlreadyFocused(pending) else { return nil }
+        guard let confirmed = confirm(pending) else {
+            invalidate()
+            return nil
+        }
+        return confirmed
     }
 
     public mutating func invalidate() {

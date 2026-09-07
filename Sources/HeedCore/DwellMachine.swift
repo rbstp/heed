@@ -25,6 +25,10 @@ public struct DwellMachine<Target: Equatable> {
     /// `confirm` re-reads the candidate at the instant focus would apply and hands back what it
     /// found, rather than a yes: for one window an element a dwell old can be a different element,
     /// so the caller needs the fresh one. Nil discards the candidate and arms the next hit test.
+    ///
+    /// It runs even for a candidate this call hit-tested. `isAlreadyFocused` sits in between and
+    /// reads Accessibility whenever the target's app is already frontmost, which is time enough
+    /// for the window to have gone.
     public mutating func tick(
         now: Double,
         condition: TickCondition,
@@ -38,14 +42,12 @@ public struct DwellMachine<Target: Equatable> {
             return nil
         }
 
-        var readThisCall = false
         if cursorMoved || forceHitTest {
             forceHitTest = false
             guard let target = hitTest() else {
                 candidate = nil
                 return nil
             }
-            readThisCall = true
             if candidate != target {
                 candidate = target
                 candidateSince = now
@@ -55,10 +57,6 @@ public struct DwellMachine<Target: Equatable> {
         guard let pending = candidate, now - candidateSince >= dwell else { return nil }
         candidate = nil
         guard !isAlreadyFocused(pending) else { return nil }
-        // Only a candidate that has been maturing since an earlier tick can have gone stale. One
-        // this call hit-tested is already what the re-read would find, and that read is the most
-        // expensive thing the agent does.
-        guard !readThisCall else { return pending }
         guard let confirmed = confirm(pending) else {
             invalidate()
             return nil

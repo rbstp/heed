@@ -45,16 +45,15 @@ final class DwellMachineTests: XCTestCase {
 
     // MARK: - Confirmation
 
-    /// The expensive re-read is what this saves: a candidate the same call hit-tested is already
-    /// what confirm would find.
-    func testAFreshlyHitTestedCandidateIsNotConfirmedAgain() {
+    /// Confirmed even at dwell 0: `isAlreadyFocused` runs in between and reads Accessibility
+    /// whenever the target's app is already frontmost, which is time enough for the window to go.
+    func testAFreshlyHitTestedCandidateIsStillConfirmed() {
         let harness = Harness(dwell: 0)
         harness.underCursor = "A"
         XCTAssertEqual(harness.tick(moved: true), "A")
-        XCTAssertEqual(harness.confirmCalls, 0)
+        XCTAssertEqual(harness.confirmCalls, 1)
     }
 
-    /// A candidate that matured across ticks can have gone stale, so it is re-read.
     func testACandidateThatMaturedAcrossTicksIsConfirmed() {
         let harness = Harness(dwell: 0.2)
         harness.underCursor = "A"

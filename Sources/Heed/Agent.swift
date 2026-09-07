@@ -768,7 +768,7 @@ final class Agent {
 
         // A whole suppression (Cmd-Tab and its cooldown) can begin and end between two heartbeats.
         // Asking whether any input is newer than the last tick needs no key monitor.
-        if sinceLastTick > config.poll * 2, secondsSinceAny(of: Agent.suppressingInputs) < sinceLastTick {
+        if sinceLastTick > config.poll * 2, Agent.secondsSinceAny(of: Agent.suppressingInputs) < sinceLastTick {
             Log.debug("input arrived while idling; re-deriving")
             machine.invalidate()
         }
@@ -867,6 +867,16 @@ final class Agent {
     /// `allCases` rebuilds its array on every access, and this one is walked 25 times a second.
     private static let guards = Guard.allCases
 
+    /// The live inputs the guards read, taken at most once each. `probe` prints a reading and its
+    /// verdict side by side, and two separate reads of the same input can disagree. Lazy, because
+    /// the tick short-circuits and each of these is a round trip.
+    private final class Readings {
+        lazy var buttons: Int = NSEvent.pressedMouseButtons
+        lazy var sinceClick: Double = Agent.secondsSinceAny(of: Agent.deliberateMouseEvents)
+        lazy var sinceKeystroke: Double =
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
+    }
+
     private func currentCondition(cursorMoved: Bool) -> TickCondition {
         if pendingInvalidation {
             pendingInvalidation = false
@@ -880,17 +890,19 @@ final class Agent {
         if numbersShowing { return .suppressing }
 
         let pending = cursorMoved || machine.needsTick
-        return Agent.guards.contains { holds($0, pending: pending) } ? .suppressing : .normal
+        let readings = Readings()
+        return Agent.guards.contains { holds($0, pending: pending, readings: readings) }
+            ? .suppressing : .normal
     }
 
     /// `pending` is whether this tick has anything to act on, which is what makes the overlay worth
     /// a round trip. `probe` passes true: it reports what is true now, not what a tick would skip.
-    private func holds(_ rule: Guard, pending: Bool) -> Bool {
+    private func holds(_ rule: Guard, pending: Bool, readings: Readings) -> Bool {
         switch rule {
         // An instantaneous snapshot; the grace period covers presses it cannot see.
-        case .mouseButtons: NSEvent.pressedMouseButtons != 0
-        case .clickGrace: config.clickGraceMs > 0 && secondsSinceClick < config.clickGrace
-        case .typing: config.typingCooldownMs > 0 && secondsSinceKeystroke < config.typingCooldown
+        case .mouseButtons: readings.buttons != 0
+        case .clickGrace: config.clickGraceMs > 0 && readings.sinceClick < config.clickGrace
+        case .typing: config.typingCooldownMs > 0 && readings.sinceKeystroke < config.typingCooldown
         case .secureInput: IsSecureEventInputEnabled()
         case .commandHeld:
             config.ignoreWhenCommandHeld
@@ -902,16 +914,16 @@ final class Agent {
     }
 
     /// What `probe` shows beside a guard that reads as more than a yes or a no.
-    private func reading(_ rule: Guard) -> String? {
+    private func reading(_ rule: Guard, readings: Readings) -> String? {
         switch rule {
         case .mouseButtons:
-            let buttons = NSEvent.pressedMouseButtons
-            return buttons == 0 ? "none" : "0b" + String(buttons, radix: 2)
+            return readings.buttons == 0 ? "none" : "0b" + String(readings.buttons, radix: 2)
         case .clickGrace:
-            return String(format: "%.2fs ago (grace %dms)", secondsSinceClick, config.clickGraceMs)
+            return String(format: "%.2fs ago (grace %dms)",
+                          readings.sinceClick, config.clickGraceMs)
         case .typing:
             return String(format: "%.2fs ago (cooldown %dms)",
-                          secondsSinceKeystroke, config.typingCooldownMs)
+                          readings.sinceKeystroke, config.typingCooldownMs)
         case .secureInput, .commandHeld, .overlay:
             return nil
         }
@@ -928,16 +940,10 @@ final class Agent {
         .keyDown, .flagsChanged,
     ]
 
-    private func secondsSinceAny(of types: [CGEventType]) -> Double {
+    private static func secondsSinceAny(of types: [CGEventType]) -> Double {
         types.reduce(Double.greatestFiniteMagnitude) { earliest, type in
             min(earliest, CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: type))
         }
-    }
-
-    private var secondsSinceClick: Double { secondsSinceAny(of: Agent.deliberateMouseEvents) }
-
-    private var secondsSinceKeystroke: Double {
-        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
     }
 
     /// Whether a menu, popover or drag image is on screen, judged by window level: while a menu is
@@ -1081,7 +1087,7 @@ final class Agent {
 
         Log.debug("focus was handed to \(frontmostName(front)); it keeps it until the pointer "
             + "settles somewhere else")
-        let warped = warpAfterHandover(front: front)
+        let warped = warpAfterHandover()
         // A dwell candidate formed before this must not land: the pre-apply revalidation uses the
         // raw hit test, which knows nothing about holds.
         machine.invalidate()
@@ -1472,14 +1478,17 @@ final class Agent {
     /// Follow focus that arrived without the pointer: Cmd-Tab, an app activating, a window picked
     /// from Raycast. The hold this tick just declared is re-declared around the new position, so
     /// the pointer has to leave the window it was put in before focus can move again.
-    private func warpAfterHandover(front: NSRunningApplication?) -> CGPoint? {
-        guard config.warpPointer, let front else { return nil }
+    private func warpAfterHandover() -> CGPoint? {
+        // Read again rather than taking the one `noteHandover` sampled: several Accessibility
+        // round trips separate them, and warping into an app that has since gone to the back
+        // would drag the pointer somewhere the hold is not about.
+        guard config.warpPointer, let front = frontmostApp() else { return nil }
 
         // Never out of a drag, and never off a click: this is for focus the keyboard moved. The two
         // click tests cover each other: the sampled one is right however late the loop gets here,
         // and the elapsed one covers a click the activation observer has not caught up with yet.
         guard clickActivated != front.processIdentifier, NSEvent.pressedMouseButtons == 0,
-              secondsSinceAny(of: Agent.deliberateMouseEvents) >= Agent.warpClickGrace
+              Agent.secondsSinceAny(of: Agent.deliberateMouseEvents) >= Agent.warpClickGrace
         else { return nil }
 
         guard let window = axElement(appElement(for: front.processIdentifier), kAXFocusedWindowAttribute),
@@ -1876,7 +1885,7 @@ final class Agent {
             // Before the hop, never inside it: `verifyFocus` is blocking `queue` right now.
             activationWait.note(pid)
             let bundleID = app.bundleIdentifier
-            let byClick = secondsSinceAny(of: Agent.deliberateMouseEvents) < Agent.warpClickGrace
+            let byClick = Agent.secondsSinceAny(of: Agent.deliberateMouseEvents) < Agent.warpClickGrace
             queue.async {
                 self.clickActivated = byClick ? pid : nil
                 guard !self.isExcluded(bundleID) else { return }
@@ -2027,9 +2036,10 @@ final class Agent {
 
         print("\nguards")
         for rule in Agent.guards {
-            let holding = holds(rule, pending: true)
+            let readings = Readings()
+            let holding = holds(rule, pending: true, readings: readings)
             print("  " + (rule.label + ":").padding(toLength: 20, withPad: " ", startingAt: 0)
-                + (reading(rule) ?? (holding ? "yes" : "no"))
+                + (reading(rule, readings: readings) ?? (holding ? "yes" : "no"))
                 + (holding ? "  <- SUPPRESSING" : ""))
         }
         let promptHolds = config.promptGuard && frontmostPromptAwaitsAnswer()

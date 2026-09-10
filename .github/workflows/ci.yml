@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: macos-latest
+    runs-on: macos-27
 
     steps:
       - name: checkout

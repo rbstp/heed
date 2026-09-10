@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: macos-27
+    runs-on: xcode-27
 
     steps:
       - name: checkout

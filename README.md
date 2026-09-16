@@ -308,6 +308,10 @@ starting with `feat` bumps the minor version; anything else bumps the patch.
 [OpenSSF Scorecard](https://github.com/ossf/scorecard) grades the repo's supply chain on every push
 to `master` and once a week. The badge above links to the run it scored; the findings behind it land
 in **Security > Code scanning**, and the raw SARIF stays on the workflow run for five days.
+Dependabot opens one pull request a week for the actions those workflows pin and one for the
+Raycast extension's npm dependencies.
+
+Vulnerability reports go through the [security policy](.github/SECURITY.md), not the issue tracker.
 
 ### Signing
 

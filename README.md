@@ -4,6 +4,7 @@
 `movefocus`.**
 
 [![CI](https://github.com/rbstp/heed/actions/workflows/ci.yml/badge.svg)](https://github.com/rbstp/heed/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/rbstp/heed/badge)](https://scorecard.dev/viewer/?uri=github.com/rbstp/heed)
 [![Release](https://img.shields.io/github/v/release/rbstp/heed?logo=github)](https://github.com/rbstp/heed/releases/latest)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![macOS 14+ on Apple Silicon](https://img.shields.io/badge/macOS-14%2B%20Apple%20Silicon-black?logo=apple)
@@ -303,6 +304,10 @@ make dist
 CI tests and packages pull requests. Merging into `master` creates a release unless the change only
 touches `.github/`, `raycast/` or this README, or the title contains `[skip-release]`. A title
 starting with `feat` bumps the minor version; anything else bumps the patch.
+
+[OpenSSF Scorecard](https://github.com/ossf/scorecard) grades the repo's supply chain on every push
+to `master` and once a week. The badge above links to the run it scored; the findings behind it land
+in **Security > Code scanning**, and the raw SARIF stays on the workflow run for five days.
 
 ### Signing
 

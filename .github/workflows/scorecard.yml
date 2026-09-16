@@ -1,0 +1,59 @@
+name: scorecard
+
+on:
+  push:
+    # Scorecard only supports the default branch; anything else publishes nothing.
+    branches:
+      - master
+  schedule:
+    # Weekly, so the score keeps tracking the repo even in quiet weeks.
+    - cron: '27 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: true
+
+# The publishing API rejects results from a workflow with write permissions up here.
+permissions: read-all
+
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Upload the SARIF to the code scanning dashboard.
+      security-events: write
+      # The OIDC token publish_results signs the results with.
+      id-token: write
+
+    steps:
+      # Actions are pinned to a commit: the Pinned-Dependencies check reads this
+      # workflow too, and the publishing API only accepts an approved set of steps.
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: run the analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Feeds the README badge and the public dataset instead of the
+          # Scorecard team's own weekly scan of this repo.
+          publish_results: true
+
+      # Keeps the raw SARIF reachable for a few days, for when the dashboard
+      # entry alone is not enough to see what a check tripped on.
+      - name: keep the sarif as an artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: results.sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: upload to code scanning
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          sarif_file: results.sarif

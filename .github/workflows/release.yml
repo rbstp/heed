@@ -44,7 +44,7 @@ jobs:
     steps:
       # Deep for the tag history the version comes from; ref pins to what merged.
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.merge_commit_sha || github.ref }}
@@ -194,7 +194,7 @@ jobs:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
 
       - name: checkout the tap
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: rbstp/homebrew-tap
           token: ${{ secrets.TAP_TOKEN }}

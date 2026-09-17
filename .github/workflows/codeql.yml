@@ -1,0 +1,52 @@
+name: codeql
+
+on:
+  pull_request:
+    branches:
+      - master
+  # The default branch needs its own analysis, or a pull request has no baseline
+  # to compare its alerts against.
+  push:
+    branches:
+      - master
+  schedule:
+    # Weekly: new queries ship without the code having to change.
+    - cron: '41 4 * * 1'
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: xcode-27
+
+    permissions:
+      security-events: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: initialize codeql
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: swift
+          # Swift has to be compiled to be analyzed; `manual` runs the same build
+          # ci does, rather than letting autobuild guess at xcodebuild.
+          build-mode: manual
+
+      # Between init and analyze on purpose: CodeQL extracts the code by watching
+      # the compiler, so a build that happens outside that window produces nothing.
+      - name: build
+        run: swift build
+
+      - name: analyze
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          category: /language:swift

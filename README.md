@@ -13,7 +13,7 @@
 Heed moves keyboard focus to the window under the pointer. It runs in the background with no Dock
 icon or main window; a menu bar icon and a global hotkey turn it on and off.
 
-Requires macOS 14 or later on Apple Silicon.
+Requires macOS 14 or later on Apple Silicon. Website: [heed.rbstp.dev](https://heed.rbstp.dev).
 
 ## Install
 
@@ -310,7 +310,7 @@ make dist
 ```
 
 CI tests and packages pull requests. Merging into `master` creates a release unless the change only
-touches `.github/`, `raycast/` or this README, or the title contains `[skip-release]`. A title
+touches `.github/`, `raycast/`, `site/` or this README, or the title contains `[skip-release]`. A title
 starting with `feat` bumps the minor version; anything else bumps the patch.
 
 [OpenSSF Scorecard](https://github.com/ossf/scorecard) grades the repo's supply chain on every push

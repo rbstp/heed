@@ -1,0 +1,553 @@
+/* ==========================================================================
+   Config: the page written as a config file.
+   Catppuccin Mocha, the palette half the Hyprland rices ship with, and one
+   typeface: JetBrains Mono. Sections are blocks, settings are key = value
+   lines with the meaning as a trailing comment, prose is a comment block.
+   A waybar-style bar on top carries the workspaces, one per block.
+   ========================================================================== */
+
+:root {
+    color-scheme: dark;
+
+    --crust: #11111b;
+    --mantle: #181825;
+    --base: #1e1e2e;
+    --surface0: #313244;
+    --surface1: #45475a;
+    --surface2: #585b70;
+    --overlay0: #6c7086;
+    --overlay1: #7f849c;
+    --overlay2: #9399b2;
+    --subtext0: #a6adc8;
+    --subtext1: #bac2de;
+    --text: #cdd6f4;
+
+    --mauve: #cba6f7;
+    --blue: #89b4fa;
+    --sapphire: #74c7ec;
+    --teal: #94e2d5;
+    --green: #a6e3a1;
+    --yellow: #f9e2af;
+    --peach: #fab387;
+    --red: #f38ba8;
+    --pink: #f5c2e7;
+    --lavender: #b4befe;
+
+    --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+    --bar-height: 2.25rem;
+    --gutter: 3.5rem;
+    --fast: 120ms;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+    scroll-padding-top: calc(var(--bar-height) + 1.5rem);
+}
+
+body {
+    min-height: 100vh;
+    background: var(--base);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    line-height: 1.7;
+    font-variant-ligatures: contextual;
+    -webkit-font-smoothing: antialiased;
+}
+
+a {
+    color: var(--blue);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+::selection {
+    background: var(--surface1);
+    color: var(--text);
+}
+
+:focus-visible {
+    outline: 2px solid var(--mauve);
+    outline-offset: 2px;
+}
+
+.skip-link {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    z-index: 300;
+    padding: 0.5rem 0.75rem;
+    background: var(--mantle);
+    border: 1px solid var(--surface1);
+    border-radius: 4px;
+    transform: translateY(-300%);
+}
+
+.skip-link:focus-visible {
+    transform: none;
+}
+
+/* --- Bar ----------------------------------------------------------------- */
+
+.bar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 1rem;
+    height: var(--bar-height);
+    padding-inline: 0.75rem;
+    background: var(--mantle);
+    border-bottom: 1px solid var(--surface0);
+    font-size: 0.8125rem;
+}
+
+.workspaces {
+    display: flex;
+    gap: 0.125rem;
+}
+
+.workspaces a {
+    display: grid;
+    place-items: center;
+    min-width: 1.625rem;
+    height: 1.625rem;
+    padding-inline: 0.375rem;
+    border-radius: 4px;
+    color: var(--overlay1);
+    font-variant-numeric: tabular-nums;
+    transition: color var(--fast), background var(--fast);
+}
+
+.workspaces a:hover {
+    color: var(--text);
+    background: var(--surface0);
+    text-decoration: none;
+}
+
+.workspaces a[aria-current="true"] {
+    color: var(--crust);
+    background: var(--mauve);
+    font-weight: 700;
+}
+
+.bar-title {
+    color: var(--subtext0);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bar-title b {
+    color: var(--text);
+    font-weight: 500;
+}
+
+.bar-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.module {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--subtext0);
+    white-space: nowrap;
+}
+
+.module svg {
+    width: 0.9375rem;
+    height: 0.9375rem;
+}
+
+.module-toggle {
+    padding: 0.1rem 0.5rem;
+    border-radius: 4px;
+    color: var(--green);
+    transition: background var(--fast);
+}
+
+.module-toggle:hover {
+    background: var(--surface0);
+}
+
+.module-toggle[aria-pressed="false"] {
+    color: var(--overlay1);
+}
+
+.module-toggle[aria-pressed="false"] .mark-core {
+    display: none;
+}
+
+.module-version {
+    color: var(--peach);
+}
+
+.module-clock {
+    color: var(--lavender);
+    font-variant-numeric: tabular-nums;
+}
+
+/* --- The file ------------------------------------------------------------ */
+
+.file {
+    width: 100%;
+    max-width: 100ch;
+    margin-inline: auto;
+    padding: 2rem clamp(1rem, 4vw, 3rem) 4rem;
+    counter-reset: line;
+}
+
+.line {
+    position: relative;
+    display: block;
+    padding-left: var(--gutter);
+    min-height: 1.7em;
+    border-radius: 3px;
+}
+
+.line::before {
+    content: counter(line);
+    counter-increment: line;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 2.5rem;
+    color: var(--surface2);
+    /* The gutter keeps the body size whatever the line itself is set in. */
+    font-size: 0.875rem;
+    font-weight: 400;
+    line-height: 1.7;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+}
+
+/* Cursorline follows the pointer while the bar module says on. */
+.follow .line:hover {
+    background: var(--surface0);
+}
+
+.follow .line:hover::before {
+    color: var(--overlay2);
+}
+
+.blank {
+    height: 1.7em;
+}
+
+/* Comments carry the prose, so they stay readable rather than dimmed. */
+.c {
+    color: var(--subtext0);
+}
+
+.c::after {
+    content: none;
+}
+
+.line.c {
+    max-width: calc(var(--gutter) + 78ch);
+    text-wrap: pretty;
+}
+
+.hash {
+    color: var(--overlay0);
+    user-select: none;
+}
+
+.line.c strong {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.line.c a {
+    color: var(--sapphire);
+}
+
+.rule {
+    color: var(--surface1);
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+/* Blocks */
+.block {
+    scroll-margin-top: calc(var(--bar-height) + 1rem);
+}
+
+.open {
+    font-size: 1.125rem;
+    line-height: 1.7;
+}
+
+.open .name {
+    color: var(--mauve);
+    font-weight: 700;
+}
+
+.brace {
+    color: var(--overlay1);
+}
+
+.kv .key,
+.bind .key {
+    color: var(--blue);
+}
+
+.eq {
+    color: var(--overlay2);
+    padding-inline: 0.5ch;
+}
+
+.var {
+    color: var(--pink);
+}
+
+.str {
+    color: var(--green);
+}
+
+.num {
+    color: var(--peach);
+}
+
+.bool {
+    color: var(--teal);
+}
+
+.off {
+    color: var(--red);
+}
+
+.kw {
+    color: var(--yellow);
+}
+
+.kv .c,
+.bind .c {
+    color: var(--overlay1);
+}
+
+/* The body of a block is indented one level, as the file would be. */
+.block .kv,
+.block .bind,
+.block .cmd,
+.block .in {
+    padding-left: calc(var(--gutter) + 4ch);
+}
+
+.block .in.c {
+    max-width: calc(var(--gutter) + 4ch + 74ch);
+}
+
+.kv,
+.bind {
+    white-space: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.kv .c,
+.bind .c {
+    white-space: normal;
+}
+
+/* Key/value rows line up in columns on wide screens. */
+@media (min-width: 60rem) {
+    .kv {
+        display: grid;
+        grid-template-columns: 23ch 15ch minmax(0, 1fr);
+        gap: 0 1ch;
+        white-space: normal;
+    }
+
+    .kv .eq {
+        display: none;
+    }
+
+    .kv .key::after {
+        content: ' =';
+        color: var(--overlay2);
+    }
+
+    .bind {
+        display: grid;
+        grid-template-columns: 42ch minmax(0, 1fr);
+        gap: 0 1ch;
+        white-space: normal;
+    }
+}
+
+/* Commands */
+.cmd {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75ch;
+    white-space: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.cmd .prompt {
+    color: var(--green);
+    user-select: none;
+}
+
+.cmd code {
+    color: var(--text);
+    font-family: inherit;
+}
+
+.cmd .c {
+    color: var(--overlay1);
+}
+
+.copy {
+    margin-left: auto;
+    padding: 0 0.5ch;
+    border-radius: 3px;
+    color: var(--overlay0);
+    font-size: 0.75rem;
+    opacity: 0;
+    transition: opacity var(--fast), color var(--fast);
+}
+
+.cmd:hover .copy,
+.copy:focus-visible,
+.copy.copied {
+    opacity: 1;
+}
+
+.copy:hover,
+.copy.copied {
+    color: var(--text);
+    background: var(--surface0);
+}
+
+/* Hero: the file header, set large. */
+.hero {
+    padding-block: 2.5rem 1rem;
+}
+
+.hero-title {
+    display: flex;
+    align-items: center;
+    gap: 0.25em;
+    color: var(--text);
+    font-size: clamp(3rem, 9vw, 6rem);
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1;
+}
+
+.hero-title .hash {
+    color: var(--surface2);
+    font-weight: 400;
+}
+
+.hero-title svg {
+    width: 0.62em;
+    height: 0.62em;
+    color: var(--mauve);
+    margin-left: 0.15em;
+}
+
+.hero .lede {
+    color: var(--text);
+    font-size: clamp(1rem, 2vw, 1.25rem);
+    line-height: 1.5;
+    max-width: calc(var(--gutter) + 56ch);
+    margin-top: 1rem;
+}
+
+.hero .lede .kw {
+    color: var(--mauve);
+}
+
+.hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 2ch;
+    margin-top: 1rem;
+}
+
+.hero-actions a {
+    color: var(--sapphire);
+}
+
+kbd {
+    color: var(--yellow);
+}
+
+.footer {
+    margin-top: 2rem;
+    color: var(--overlay1);
+}
+
+@media (max-width: 48rem) {
+    :root {
+        --gutter: 2.5rem;
+    }
+
+    .line::before {
+        width: 1.75rem;
+    }
+
+    .bar {
+        grid-template-columns: auto 1fr;
+    }
+
+    .bar-title,
+    .module-clock,
+    .module-version,
+    .module-github,
+    .module-toggle span {
+        display: none;
+    }
+
+    .bar-right {
+        justify-self: end;
+    }
+
+    .block .kv,
+    .block .bind,
+    .block .cmd,
+    .block .in {
+        padding-left: calc(var(--gutter) + 2ch);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.001ms !important;
+    }
+}

@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Heed</title>
+    <meta name="description" content="Focus follows mouse and directional focus for macOS, inspired by Hyprland's follow_mouse and movefocus.">
+    <meta name="author" content="Richard Boisvert-St-Pierre">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#181825">
+    <link rel="canonical" href="https://heed.rbstp.dev/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Heed">
+    <meta property="og:title" content="Heed">
+    <meta property="og:description" content="Focus follows mouse and directional focus for macOS, inspired by Hyprland's follow_mouse and movefocus.">
+    <meta property="og:url" content="https://heed.rbstp.dev/">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="preload" href="fonts/JetBrainsMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="styles/fonts.css">
+    <link rel="stylesheet" href="styles/config.css">
+</head>
+<body class="follow">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">
+        <symbol id="mark" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 11l2-2-2-2M4 7L2 9l2 2M11 14l-2 2-2-2M11 4L9 2 7 4"/>
+            <rect class="mark-core" x="7" y="7" width="4" height="4" rx="1.2" fill="currentColor" stroke="none"/>
+        </symbol>
+    </svg>
+
+    <header class="bar">
+        <nav class="workspaces" id="workspaces" aria-label="Sections">
+            <a href="#install">1</a><a href="#binds">2</a><a href="#warp">3</a><a href="#remote">4</a><a href="#general">5</a><a href="#pointer">6</a><a href="#guards">7</a><a href="#exclude">8</a><a href="#troubleshooting">9</a>
+        </nav>
+        <p class="bar-title">~/.config/heed/<b>heed.conf</b></p>
+        <div class="bar-right">
+            <button class="module module-toggle" id="ffm-toggle" type="button" aria-pressed="true" title="Cursorline follows the pointer. Click to turn it off.">
+                <svg aria-hidden="true"><use href="#mark"/></svg><span id="ffm-label">follow_mouse = 1</span>
+            </button>
+            <a class="module module-version" id="version" href="https://github.com/rbstp/heed/releases/latest">v0.12.3</a>
+            <a class="module module-github" href="https://github.com/rbstp/heed">github</a>
+            <span class="module module-clock" id="clock" aria-hidden="true"></span>
+        </div>
+    </header>
+
+    <main class="file" id="main">
+
+        <section class="hero">
+            <p class="line rule" aria-hidden="true"><span class="hash">#</span> ────────────────────────────────────────────────────────────────────────</p>
+            <h1 class="line hero-title"><span class="hash">#</span> heed <svg aria-hidden="true"><use href="#mark"/></svg></h1>
+            <p class="line c lede"><span class="hash">#</span> Focus follows mouse and directional focus for macOS, after Hyprland's <span class="kw">follow_mouse</span> and <span class="kw">movefocus</span>.</p>
+            <p class="line c"><span class="hash">#</span> Heed moves keyboard focus to the window under the pointer. It runs in the background with no Dock icon or main window; a menu bar icon and a global hotkey turn it on and off. macOS 14 or later, Apple Silicon.</p>
+            <p class="line c hero-actions"><span class="hash">#</span> <a href="https://github.com/rbstp/heed">source</a> <a href="https://github.com/rbstp/heed/releases/latest">releases</a> <a href="https://github.com/rbstp/heed/tree/master/raycast">raycast extension</a> <a href="https://rbstp.dev">rbstp.dev</a></p>
+            <p class="line rule" aria-hidden="true"><span class="hash">#</span> ────────────────────────────────────────────────────────────────────────</p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <section class="block" id="install">
+            <h2 class="line open"><span class="name">install</span> <span class="brace">{</span></h2>
+            <div class="line cmd"><span class="prompt">$</span><code>brew install --cask rbstp/tap/heed</code><button class="copy" type="button" data-copy="brew install --cask rbstp/tap/heed">copy</button></div>
+            <div class="line blank"></div>
+            <p class="line in c"><span class="hash">#</span> Or from source. <code>make cert</code> once, and only without a Developer ID; it keeps the Accessibility grant across rebuilds.</p>
+            <div class="line cmd"><span class="prompt">$</span><code>make cert &amp;&amp; make install</code><span class="c"># build, sign, install, start</span><button class="copy" type="button" data-copy="make cert && make install">copy</button></div>
+            <div class="line blank"></div>
+            <p class="line in c"><span class="hash">#</span> On first launch, grant Heed access in <strong>System Settings › Privacy &amp; Security › Accessibility</strong>. It picks the grant up without a restart. Every release is signed with a Developer ID, notarized, and carries a build provenance attestation next to it:</p>
+            <div class="line cmd"><span class="prompt">$</span><code>gh attestation verify Heed-0.12.3.zip --repo rbstp/heed</code><button class="copy" type="button" data-copy="gh attestation verify Heed-0.12.3.zip --repo rbstp/heed">copy</button></div>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <section class="block" id="binds">
+            <h2 class="line open"><span class="name">binds</span> <span class="brace">{</span></h2>
+            <p class="line in c"><span class="hash">#</span> Heed registers hotkeys exclusively: a combination it claims is gone from every other app. These work whether or not focus following is on.</p>
+            <div class="line kv"><span class="key var">$mod</span><span class="eq">=</span><span class="val kw">CTRL CMD</span><span class="c"><span class="hash">#</span> Shortcut Modifier in the menu changes every bind at once</span></div>
+            <div class="line blank"></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span>, H, <span class="kw">toggle</span></span><span class="c"><span class="hash">#</span> focus follows mouse on or off, from anywhere</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span>, right, <span class="kw">movefocus</span>, next</span><span class="c"><span class="hash">#</span> next visible window, screen by screen from left to right, then left to right within each screen</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span>, left, <span class="kw">movefocus</span>, prev</span><span class="c"><span class="hash">#</span> spatial order, not stacking order: stepping through does not reorder the cycle</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span>, 1..9, <span class="kw">movefocus</span>, window</span><span class="c"><span class="hash">#</span> the window with that number, counted the same way; a number with no window does nothing</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> (held), , <span class="kw">shownumbers</span></span><span class="c"><span class="hash">#</span> each window numbered on screen after 100 ms, so the digit is read rather than counted</span></div>
+            <div class="line blank"></div>
+            <p class="line in c"><span class="hash">#</span> Directional focus, off by default because every bind is taken from every other app. WASD rather than HJKL: the toggle is already on H. A window sharing a row or column with the focused one wins over a closer one that does not, and the edge is a dead end rather than a wrap.</p>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, A, <span class="kw">movefocus</span>, l</span><span class="c"><span class="hash">#</span> defaults write io.github.rbstp.heed focusLeftHotkey 'cmd+ctrl+alt+a'</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, S, <span class="kw">movefocus</span>, d</span><span class="c"><span class="hash">#</span> focusDownHotkey 'cmd+ctrl+alt+s'</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, W, <span class="kw">movefocus</span>, u</span><span class="c"><span class="hash">#</span> focusUpHotkey 'cmd+ctrl+alt+w'</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, D, <span class="kw">movefocus</span>, r</span><span class="c"><span class="hash">#</span> focusRightHotkey 'cmd+ctrl+alt+d'</span></div>
+            <div class="line blank"></div>
+            <p class="line in c"><span class="hash">#</span> A hotkey needs at least one modifier other than Shift. If another app already registered it, Heed logs the refusal and registers nothing. An empty string disables a bind. The menu offers Command-Option with a warning and does not offer Command-Shift at all; <code>defaults write</code> accepts either.</p>
+            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f' &amp;&amp; make restart</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f' && make restart">copy</button></div>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <section class="block" id="warp">
+            <h2 class="line open"><span class="name">warp</span> <span class="brace">{</span></h2>
+            <p class="line in c"><span class="hash">#</span> Mouse follows focus. Focus moved by keyboard leaves the pointer over the window you just left, and the next flick of the mouse drags focus back there. Turn it around and the pointer follows focus into the new window: on Command-Tab, on the focus binds, on a window picked from Raycast's Switch Windows, and on any other keyboard-driven activation. Not for a click, mid-drag, into a window Heed would not focus by pointer, or when the pointer is already inside.</p>
+            <div class="line kv"><span class="key">warpPointer</span><span class="eq">=</span><span class="val bool">false</span><span class="c"><span class="hash">#</span> Move the pointer into a window that took keyboard focus. Needs handoverGuard on.</span></div>
+            <div class="line kv"><span class="key">warpX</span><span class="eq">=</span><span class="val num">50</span><span class="c"><span class="hash">#</span> Where in that window the pointer lands, as a percentage across.</span></div>
+            <div class="line kv"><span class="key">warpY</span><span class="eq">=</span><span class="val num">50</span><span class="c"><span class="hash">#</span> Where in that window the pointer lands, as a percentage down.</span></div>
+            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed warpPointer -bool true &amp;&amp; make restart</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed warpPointer -bool true && make restart">copy</button></div>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <section class="block" id="remote">
+            <h2 class="line open"><span class="name">remote</span> <span class="brace">{</span></h2>
+            <p class="line in c"><span class="hash">#</span> Drive it from somewhere else. A URL reaches the running agent directly, and the same vocabulary works as flags on the installed binary, so Heed can be driven without registering anything.</p>
+            <div class="line cmd"><span class="prompt">$</span><code>open 'heed://focus/next'</code><span class="c"># also prev, left, right, up, down</span><button class="copy" type="button" data-copy="open 'heed://focus/next'">copy</button></div>
+            <div class="line cmd"><span class="prompt">$</span><code>open 'heed://focus/3'</code><span class="c"># numbers past 9 work here; heed://focus/id/&lt;n&gt; takes the window server's own number</span></div>
+            <div class="line cmd"><span class="prompt">$</span><code>open 'heed://toggle'</code><span class="c"># also enable, disable</span></div>
+            <div class="line cmd"><span class="prompt">$</span><code>~/Applications/Heed.app/Contents/MacOS/Heed --focus next</code></div>
+            <div class="line cmd"><span class="prompt">$</span><code>~/Applications/Heed.app/Contents/MacOS/Heed --windows</code><span class="c"># the focus ring as JSON, whether or not Heed is running</span></div>
+            <div class="line blank"></div>
+            <p class="line in c"><span class="hash">#</span> <strong>With Raycast.</strong> Raycast already tiles and switches windows; Heed adds the pointer. The <a href="https://github.com/rbstp/heed/tree/master/raycast">extension</a> has a command for each of these, so the hotkey is Raycast's and Heed claims nothing. Or a Quicklink to <code>heed://focus/next</code> with a hotkey, then free the combination Heed holds:</p>
+            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed focusNextHotkey '' &amp;&amp; make restart</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed focusNextHotkey '' && make restart">copy</button></div>
+            <div class="line blank"></div>
+            <p class="line in c"><span class="hash">#</span> The flags reach the agent over a distributed notification, which any process in your login session can post and read. Heed holds Accessibility permission, so anything in your session can switch it off or move focus around while it runs. The vocabulary is fixed at toggle-and-focus: no arbitrary arguments, no window contents, nothing read back. If that is not a trade you want, leave the commands alone and use the binds; nothing else in Heed listens.</p>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <p class="line c"><span class="hash">#</span> Settings live in the <code>io.github.rbstp.heed</code> defaults domain, flat: <code>defaults write io.github.rbstp.heed &lt;key&gt; &lt;value&gt;</code>, then restart Heed. The blocks below group them for reading; the values are the defaults.</p>
+        <div class="line blank"></div>
+
+        <section class="block" id="general">
+            <h2 class="line open"><span class="name">general</span> <span class="brace">{</span></h2>
+            <div class="line kv"><span class="key">enabled</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Turn focus following on or off.</span></div>
+            <div class="line kv"><span class="key">menuBarIcon</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Show the menu bar icon. Click toggles; right-click for the modifier, numbers, log, version, quit.</span></div>
+            <div class="line kv"><span class="key">raise</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Raise the selected window within its app. macOS does not separate focus from raising across apps.</span></div>
+            <div class="line kv"><span class="key">verbose</span><span class="eq">=</span><span class="val bool">false</span><span class="c"><span class="hash">#</span> Log each focus decision.</span></div>
+            <div class="line blank"></div>
+            <div class="line kv"><span class="key">hotkey</span><span class="eq">=</span><span class="val str">cmd+ctrl+h</span><span class="c"><span class="hash">#</span> Global toggle. Empty string disables it.</span></div>
+            <div class="line kv"><span class="key">focusNextHotkey</span><span class="eq">=</span><span class="val str">cmd+ctrl+right</span><span class="c"><span class="hash">#</span> Move focus to the next window.</span></div>
+            <div class="line kv"><span class="key">focusPreviousHotkey</span><span class="eq">=</span><span class="val str">cmd+ctrl+left</span><span class="c"><span class="hash">#</span> Move focus to the previous window.</span></div>
+            <div class="line kv"><span class="key">focusWindowHotkey</span><span class="eq">=</span><span class="val str">cmd+ctrl+1</span><span class="c"><span class="hash">#</span> Window 1; the same modifiers with 2 to 9 reach the others.</span></div>
+            <div class="line kv"><span class="key">focusLeftHotkey</span><span class="eq">=</span><span class="val off">off</span><span class="c"><span class="hash">#</span> Nearest window to the left.</span></div>
+            <div class="line kv"><span class="key">focusRightHotkey</span><span class="eq">=</span><span class="val off">off</span><span class="c"><span class="hash">#</span> Nearest window to the right.</span></div>
+            <div class="line kv"><span class="key">focusUpHotkey</span><span class="eq">=</span><span class="val off">off</span><span class="c"><span class="hash">#</span> Nearest window above.</span></div>
+            <div class="line kv"><span class="key">focusDownHotkey</span><span class="eq">=</span><span class="val off">off</span><span class="c"><span class="hash">#</span> Nearest window below.</span></div>
+            <div class="line kv"><span class="key">windowNumbers</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Number the windows on screen while the numbered shortcuts' modifier is held.</span></div>
+            <div class="line kv"><span class="key">windowNumbersDelayMs</span><span class="eq">=</span><span class="val num">100</span><span class="c"><span class="hash">#</span> How long that modifier must be held first.</span></div>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <section class="block" id="pointer">
+            <h2 class="line open"><span class="name">pointer</span> <span class="brace">{</span></h2>
+            <div class="line kv"><span class="key">dwellMs</span><span class="eq">=</span><span class="val num">0</span><span class="c"><span class="hash">#</span> Time the pointer must rest before focus changes. Try 200 if instant is too eager.</span></div>
+            <div class="line kv"><span class="key">pollMs</span><span class="eq">=</span><span class="val num">40</span><span class="c"><span class="hash">#</span> Pointer sampling interval while active.</span></div>
+            <div class="line kv"><span class="key">idlePollMs</span><span class="eq">=</span><span class="val num">1000</span><span class="c"><span class="hash">#</span> Heartbeat while idle. Mouse movement wakes the fast loop.</span></div>
+            <div class="line kv"><span class="key">entryMotionPx</span><span class="eq">=</span><span class="val num">6</span><span class="c"><span class="hash">#</span> Travel required before a different window may take focus. 0 disables the guard.</span></div>
+            <div class="line kv"><span class="key">verifyTimeoutMs</span><span class="eq">=</span><span class="val num">100</span><span class="c"><span class="hash">#</span> Time allowed to confirm a focus change before retrying.</span></div>
+            <div class="line kv"><span class="key">requireStandardWindow</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Only focus ordinary AXStandardWindow windows. Floating panels are not targets.</span></div>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <section class="block" id="guards">
+            <h2 class="line open"><span class="name">guards</span> <span class="brace">{</span></h2>
+            <p class="line in c"><span class="hash">#</span> Heed follows the pointer but avoids the common focus fights. A window that appears under a still pointer does not take focus; dialogs and prompts keep theirs; focus that arrived by shortcut, launch, menu or Command-Tab stays put until the pointer rests on another window, and crossing the menu bar, Dock or empty space on the way does not release it. Pointer focus is also suppressed while the window numbers are up.</p>
+            <div class="line kv"><span class="key">typingCooldownMs</span><span class="eq">=</span><span class="val num">500</span><span class="c"><span class="hash">#</span> Ignore pointer focus after a keystroke.</span></div>
+            <div class="line kv"><span class="key">clickGraceMs</span><span class="eq">=</span><span class="val num">150</span><span class="c"><span class="hash">#</span> Ignore pointer focus after a mouse press or release.</span></div>
+            <div class="line kv"><span class="key">ignoreWhenCommandHeld</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Suppress pointer focus while Command is held.</span></div>
+            <div class="line kv"><span class="key">menuGuard</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Suppress pointer focus while menus, popovers or drag images are visible.</span></div>
+            <div class="line kv"><span class="key">handoverGuard</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Keep focus that arrived without pointer movement.</span></div>
+            <div class="line kv"><span class="key">handoverSettleMs</span><span class="eq">=</span><span class="val num">300</span><span class="c"><span class="hash">#</span> Rest time on another window before releasing held focus.</span></div>
+            <div class="line kv"><span class="key">promptGuard</span><span class="eq">=</span><span class="val bool">true</span><span class="c"><span class="hash">#</span> Keep focus on a prompt until it is answered.</span></div>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <section class="block" id="exclude">
+            <h2 class="line open"><span class="name">exclude</span> <span class="brace">{</span></h2>
+            <p class="line in c"><span class="hash">#</span> Heed always excludes itself, Dock, WindowServer, loginwindow, Control Center, Notification Center, SystemUIServer, the screenshot UI, Spotlight, Raycast and AltTab.</p>
+            <div class="line kv"><span class="key">excludedWindowTitles</span><span class="eq">=</span><span class="val">[]</span><span class="c"><span class="hash">#</span> Case-insensitive regular expressions for window titles to skip.</span></div>
+            <div class="line kv"><span class="key">excludedBundleIDs</span><span class="eq">=</span><span class="val">[]</span><span class="c"><span class="hash">#</span> Extra application bundle IDs to skip.</span></div>
+            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed excludedWindowTitles -array '^Picture in Picture$'</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed excludedWindowTitles -array '^Picture in Picture$'">copy</button></div>
+            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed excludedBundleIDs -array com.example.Overlay</code></div>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <section class="block" id="troubleshooting">
+            <h2 class="line open"><span class="name">troubleshooting</span> <span class="brace">{</span></h2>
+            <p class="line in c"><span class="hash">#</span> See what Heed sees under the pointer, or at a point, and log each decision. The log is append-only; <code>make logs-clear</code> truncates it.</p>
+            <div class="line cmd"><span class="prompt">$</span><code>make probe</code><span class="c"># or make probe X=960 Y=540</span></div>
+            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed verbose -bool true &amp;&amp; make restart &amp;&amp; make logs</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed verbose -bool true && make restart && make logs">copy</button></div>
+            <div class="line blank"></div>
+            <p class="line in c"><span class="hash">#</span> <strong>Accessibility stopped working after an upgrade.</strong> Releases from 0.12.0 on are signed with a Developer ID and notarized, so the grant carries across versions. Upgrading from an older, ad-hoc signed build is the one exception: that grant was tied to the old binary and cannot transfer. If Heed stays dimmed:</p>
+            <div class="line cmd"><span class="prompt">$</span><code>tccutil reset Accessibility io.github.rbstp.heed</code><button class="copy" type="button" data-copy="tccutil reset Accessibility io.github.rbstp.heed">copy</button></div>
+            <p class="line"><span class="brace">}</span></p>
+        </section>
+
+        <div class="line blank"></div>
+
+        <p class="line c"><span class="hash">#</span> <strong>Limitations.</strong> Focusing another application raises it. Apps with incomplete Accessibility support may only work at application level: some games, XQuartz and Java applications expose no individual windows, so the pointer focuses them as a whole and the focus binds skip them. Stage Manager may override window ordering.</p>
+        <div class="line blank"></div>
+        <p class="line c"><span class="hash">#</span> <strong>Prior art.</strong> <a href="https://github.com/sbmpost/AutoRaise">AutoRaise</a> does the same in C++. yabai and AeroSpace include related features in larger window managers.</p>
+        <div class="line blank"></div>
+        <p class="line c footer"><span class="hash">#</span> Swift 6, one binary, MIT. Built by <a href="https://rbstp.dev">Richard Boisvert-St-Pierre</a>. <a href="https://github.com/rbstp/heed">source</a> · <a href="https://github.com/rbstp/heed/releases">releases</a> · <a href="https://github.com/rbstp/heed/issues">issues</a> · <a href="https://github.com/rbstp/heed/security/policy">security policy</a></p>
+        <p class="line rule" aria-hidden="true"><span class="hash">#</span> ────────────────────────────────────────────────────────────────────────</p>
+    </main>
+
+    <script src="scripts/config.js" defer></script>
+</body>
+</html>

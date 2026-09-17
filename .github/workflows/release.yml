@@ -12,6 +12,8 @@ on:
       - README.md
       # The Raycast extension ships through the Raycast store, not the app's release.
       - raycast/**
+      # The website deploys through pages.yml.
+      - site/**
   workflow_dispatch:
     inputs:
       version:

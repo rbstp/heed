@@ -1,14 +1,5 @@
-/* Self-hosted variable fonts, the same two faces as rbstp.dev. Inter carries
-   the prose; JetBrains Mono carries keys, code and anything that counts.
-   Latin only: the site has no text outside it. */
-@font-face {
-    font-family: 'Inter';
-    src: url('../fonts/Inter-Variable-latin.woff2') format('woff2-variations');
-    font-weight: 400 800;
-    font-style: normal;
-    font-display: swap;
-}
-
+/* Self-hosted variable font, the same JetBrains Mono as rbstp.dev. One face
+   for the whole page, as a config file would be set. Latin only. */
 @font-face {
     font-family: 'JetBrains Mono';
     src: url('../fonts/JetBrainsMono-Variable.woff2') format('woff2-variations');

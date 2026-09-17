@@ -2,11 +2,10 @@ name: scorecard
 
 on:
   push:
-    # Scorecard only supports the default branch; anything else publishes nothing.
+    # Only the default branch publishes.
     branches:
       - master
   schedule:
-    # Weekly, so the score keeps tracking the repo even in quiet weeks.
     - cron: '27 4 * * 1'
   workflow_dispatch:
 
@@ -14,7 +13,8 @@ concurrency:
   group: scorecard-${{ github.ref }}
   cancel-in-progress: true
 
-# The publishing API rejects results from a workflow with write permissions up here.
+# The publishing API rejects a workflow with write permissions at this level, a
+# runner other than Ubuntu, or steps outside the set it approves.
 permissions: read-all
 
 jobs:
@@ -22,14 +22,10 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      # Upload the SARIF to the code scanning dashboard.
       security-events: write
-      # The OIDC token publish_results signs the results with.
       id-token: write
 
     steps:
-      # Actions are pinned to a commit: the Pinned-Dependencies check reads this
-      # workflow too, and the publishing API only accepts an approved set of steps.
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,12 +36,9 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
-          # Feeds the README badge and the public dataset instead of the
-          # Scorecard team's own weekly scan of this repo.
+          # Backs the README badge.
           publish_results: true
 
-      # Keeps the raw SARIF reachable for a few days, for when the dashboard
-      # entry alone is not enough to see what a check tripped on.
       - name: keep the sarif as an artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

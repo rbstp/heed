@@ -1,15 +1,12 @@
 version: 2
 
 updates:
-  # The workflows pin actions to a commit, which is what Scorecard's
-  # Pinned-Dependencies check asks for; without this nothing would ever move
-  # those commits forward.
+  # Nothing else moves the commits the workflows pin.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
       day: monday
-    # One pull request for all of them: they move together and none of it ships.
     groups:
       actions:
         patterns:

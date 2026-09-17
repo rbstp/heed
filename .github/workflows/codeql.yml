@@ -4,13 +4,11 @@ on:
   pull_request:
     branches:
       - master
-  # The default branch needs its own analysis, or a pull request has no baseline
-  # to compare its alerts against.
+  # A pull request's alerts are compared against the default branch's.
   push:
     branches:
       - master
   schedule:
-    # Weekly: new queries ship without the code having to change.
     - cron: '41 4 * * 1'
 
 concurrency:
@@ -37,12 +35,10 @@ jobs:
         uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           languages: swift
-          # Swift has to be compiled to be analyzed; `manual` runs the same build
-          # ci does, rather than letting autobuild guess at xcodebuild.
           build-mode: manual
 
-      # Between init and analyze on purpose: CodeQL extracts the code by watching
-      # the compiler, so a build that happens outside that window produces nothing.
+      # Between init and analyze on purpose: CodeQL extracts Swift by watching the
+      # compiler, so a build outside that window produces nothing.
       - name: build
         run: swift build
 

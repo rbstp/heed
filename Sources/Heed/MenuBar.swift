@@ -7,6 +7,7 @@ final class MenuBarController: NSObject {
     private let onQuit: () -> Void
     private let onChooseModifier: (ModifierPreset) -> Void
     private let onToggleNumbers: () -> Void
+    private let onOpenSettings: () -> Void
     private var state = MenuBarState(enabled: true, trusted: true)
     var showsNumbers = true
     var shortcut: HotkeySpec?
@@ -17,13 +18,15 @@ final class MenuBarController: NSObject {
         onClick: @escaping () -> Void,
         onQuit: @escaping () -> Void,
         onChooseModifier: @escaping (ModifierPreset) -> Void,
-        onToggleNumbers: @escaping () -> Void
+        onToggleNumbers: @escaping () -> Void,
+        onOpenSettings: @escaping () -> Void
     ) {
         dispatchPrecondition(condition: .onQueue(.main))
         self.onClick = onClick
         self.onQuit = onQuit
         self.onChooseModifier = onChooseModifier
         self.onToggleNumbers = onToggleNumbers
+        self.onOpenSettings = onOpenSettings
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -89,6 +92,7 @@ final class MenuBarController: NSObject {
             toggle.keyEquivalentModifierMask = shortcut.modifiers.appKitMask
         }
         menu.addItem(toggle)
+        menu.addItem(.separator())
 
         let modifier = NSMenuItem(title: "Shortcut Modifier", action: nil, keyEquivalent: "")
         modifier.submenu = modifierMenu()
@@ -101,6 +105,11 @@ final class MenuBarController: NSObject {
         numbers.toolTip = "Number the windows while the shortcut modifier is held, so the window "
             + "to switch to can be read off the screen."
         menu.addItem(numbers)
+        menu.addItem(.separator())
+
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
 
         let log = NSMenuItem(title: "Open Log", action: #selector(openLog), keyEquivalent: "")
         log.target = self
@@ -178,6 +187,10 @@ final class MenuBarController: NSObject {
 
     @objc private func toggleNumbersFromMenu() {
         onToggleNumbers()
+    }
+
+    @objc private func openSettings() {
+        onOpenSettings()
     }
 
     @objc private func quitFromMenu() {

@@ -9,6 +9,12 @@ public enum HeedCommand: Equatable, Sendable {
     /// A window by the number the window server gives it, which survives the ring being rebuilt.
     case focusWindowID(Int)
     case focusDirection(FocusDirection)
+    /// A setting by its defaults key, as the Settings window would set it.
+    case set(key: String, value: String)
+    case reset(key: String)
+    case releaseHotkeys
+    case restoreHotkeys
+    case openSettings
 
     public var written: String {
         switch self {
@@ -19,18 +25,28 @@ public enum HeedCommand: Equatable, Sendable {
         case .focusNumber(let number): "focus/\(number)"
         case .focusWindowID(let id): "focus/id/\(id)"
         case .focusDirection(let direction): "focus/\(direction.rawValue)"
+        case .set(let key, let value): "set/\(key)/\(value)"
+        case .reset(let key): "reset/\(key)"
+        case .releaseHotkeys: "hotkeys/release"
+        case .restoreHotkeys: "hotkeys/restore"
+        case .openSettings: "settings"
         }
     }
 }
 
 public func parseCommand(_ text: String) -> HeedCommand? {
-    parseCommand(path: text.split(separator: "/").map(String.init))
+    // `set` keeps its value whole, slashes and all.
+    let whole = text.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+    if whole.count == 3, whole[0].trimmingCharacters(in: .whitespaces).lowercased() == "set" {
+        return parseCommand(path: whole)
+    }
+    return parseCommand(path: text.split(separator: "/").map(String.init))
 }
 
 public func parseCommand(path: [String]) -> HeedCommand? {
-    let segments = path
-        .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-        .filter { !$0.isEmpty }
+    // Verbs are matched lowercased; a key or value is passed on as written.
+    let given = path.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    let segments = given.map { $0.lowercased() }
 
     switch segments.first {
     case "toggle":
@@ -46,6 +62,20 @@ public func parseCommand(path: [String]) -> HeedCommand? {
         }
         guard segments.count == 2 else { return nil }
         return parseFocus(segments[1])
+    case "set":
+        guard given.count >= 3 else { return nil }
+        return .set(key: given[1], value: path.count == 3 ? path[2] : given[2...].joined(separator: "/"))
+    case "reset":
+        return given.count == 2 ? .reset(key: given[1]) : nil
+    case "settings":
+        return segments.count == 1 ? .openSettings : nil
+    case "hotkeys":
+        guard segments.count == 2 else { return nil }
+        switch segments[1] {
+        case "release": return .releaseHotkeys
+        case "restore": return .restoreHotkeys
+        default: return nil
+        }
     default:
         return nil
     }
@@ -66,7 +96,7 @@ private func parseFocus(_ what: String) -> HeedCommand? {
 }
 
 public func parseCommand(host: String?, path: String) -> HeedCommand? {
-    parseCommand(path: [host ?? ""] + path.split(separator: "/").map(String.init))
+    parseCommand((host ?? "") + path)
 }
 
 public enum CommandLineRequest: Equatable, Sendable {
@@ -80,7 +110,7 @@ public func commandLineRequest(_ arguments: [String]) -> CommandLineRequest {
     guard let index = arguments.firstIndex(where: { $0.hasPrefix("--") }) else { return .none }
 
     let flag = arguments[index]
-    let path = [String(flag.dropFirst(2))] + arguments[arguments.index(after: index)...].prefix(1)
+    let path = [String(flag.dropFirst(2))] + arguments[arguments.index(after: index)...].prefix(2)
     guard let command = parseCommand(path: path) else { return .unknown(flag) }
     return .command(command)
 }

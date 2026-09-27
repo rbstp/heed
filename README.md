@@ -47,8 +47,8 @@ gh attestation verify Heed-0.12.3.zip --repo rbstp/heed
   Heed is on and is empty while it is off. A dim icon means Heed cannot work, because it is off or
   has no Accessibility permission; hover to see which.
 - **Right-click** (or control-click) it to change the shortcut modifier, switch the window numbers
-  on or off, open the log, see the version, or quit. Quitting unloads the login agent until the next
-  login.
+  on or off, open Settings, open the log, see the version, or quit. Quitting unloads the login agent
+  until the next login.
 - **Control+Command+H** toggles Heed from anywhere.
 - **Control+Command+Right / Left** moves keyboard focus to the next or previous visible window,
   screen by screen from left to right, then left to right within each screen. A window focused this
@@ -62,15 +62,9 @@ gh attestation verify Heed-0.12.3.zip --repo rbstp/heed
   appear after a tenth of a second, so a shortcut typed at speed does not flash them. On by default;
   **Show Window Numbers** in the right-click menu turns them off.
 - **Directional focus** moves to the nearest window left, right, up, or down of the focused one.
-  Off by default, because each shortcut Heed registers is taken away from every other app:
-
-  ```sh
-  defaults write io.github.rbstp.heed focusLeftHotkey 'cmd+ctrl+alt+a'
-  defaults write io.github.rbstp.heed focusDownHotkey 'cmd+ctrl+alt+s'
-  defaults write io.github.rbstp.heed focusUpHotkey 'cmd+ctrl+alt+w'
-  defaults write io.github.rbstp.heed focusRightHotkey 'cmd+ctrl+alt+d'
-  make restart
-  ```
+  Off by default, because each shortcut Heed registers is taken away from every other app. Give the
+  four a combination under **Settings > Shortcuts**, for example `cmd+ctrl+alt+a`, `cmd+ctrl+alt+s`,
+  `cmd+ctrl+alt+w` and `cmd+ctrl+alt+d`.
 
   WASD rather than HJKL because the toggle is already H: two shortcuts on the same key can be told
   apart by their modifiers, but then **Shortcut Modifier** cannot put both under one modifier, and
@@ -84,11 +78,8 @@ gh attestation verify Heed-0.12.3.zip --repo rbstp/heed
 
 Focus moved by keyboard leaves the pointer over the window you just left, and the next flick of the
 mouse drags focus back there. Turn it around and the pointer follows focus into the new window:
-
-```sh
-defaults write io.github.rbstp.heed warpPointer -bool true
-make restart
-```
+**Settings > Pointer > Move the pointer into the focused window**, or `warpPointer` from anywhere
+else (see [Configuration](#configuration)).
 
 It moves on Command-Tab, on the focus shortcuts, on a window picked from Raycast's Switch Windows,
 and on any other keyboard-driven activation. It does not move for a click, mid-drag, into a window
@@ -97,14 +88,9 @@ Heed would not focus by pointer, or when the pointer is already inside the windo
 
 Off by default, and it needs `handoverGuard` on, which it is by default.
 
-Change or disable the shortcuts:
-
-```sh
-defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f'
-defaults write io.github.rbstp.heed focusNextHotkey 'cmd+ctrl+alt+right'
-defaults write io.github.rbstp.heed hotkey ''
-make restart
-```
+Change or disable the shortcuts under **Settings > Shortcuts**: a field holds a combination such as
+`cmd+ctrl+alt+f`, an empty field registers nothing, and **Release All** empties every field at once.
+Each field says whether its combination was registered; the log says why when it was not.
 
 A hotkey needs at least one modifier other than Shift. If another app already registered it, Heed
 logs the refusal and registers nothing.
@@ -115,15 +101,11 @@ which case nothing changes and the log says which app holds it.
 
 Heed registers hotkeys exclusively, so a combination it claims is gone from every other app. The
 menu offers Command-Option with a warning (it moves between tabs in most browsers and terminals) and
-does not offer Command-Shift at all (it selects a line in every text field). `defaults write` accepts
+does not offer Command-Shift at all (it selects a line in every text field). A Settings field accepts
 either. Combinations the system reads directly cannot be refused, only warned about.
 
-Hide the menu bar icon:
-
-```sh
-defaults write io.github.rbstp.heed menuBarIcon -bool false
-make restart
-```
+**Settings > General > Menu bar icon** hides the icon. Settings then open with
+`open heed://settings`, or the icon comes back with `open heed://set/menuBarIcon/true`.
 
 ## Drive it from somewhere else
 
@@ -135,7 +117,16 @@ open 'heed://focus/next'
 open 'heed://focus/left'
 open 'heed://focus/3'
 open 'heed://toggle'      # also enable, disable
+open 'heed://set/warpPointer/true'
+open 'heed://set/focusNextHotkey/none'
+open 'heed://reset/dwellMs'
+open 'heed://hotkeys/release'   # every shortcut, or restore
+open 'heed://settings'
 ```
+
+`set` takes any key from [Configuration](#configuration) and a value as the Settings window would
+hold it: `true` or `false`, a number, a combination or `none`. A list is comma-separated, so a
+pattern with a comma in it has to go through the window. `reset` puts the key back to its default.
 
 Window numbers past 9 work here even though the shortcuts stop at the digit keys.
 `heed://focus/id/<n>` takes the window server's own number instead, the `id` field of `--windows`:
@@ -147,6 +138,8 @@ The same vocabulary as flags on the installed binary:
 ~/Applications/Heed.app/Contents/MacOS/Heed --focus next
 ~/Applications/Heed.app/Contents/MacOS/Heed --toggle
 ~/Applications/Heed.app/Contents/MacOS/Heed --on
+~/Applications/Heed.app/Contents/MacOS/Heed --set dwellMs 200
+~/Applications/Heed.app/Contents/MacOS/Heed --hotkeys release
 ```
 
 `--windows` prints the focus ring as JSON, in the order the numbered shortcuts count, so something
@@ -175,17 +168,19 @@ cd raycast && npm install && npm run dev
 Or without the extension, with a Quicklink:
 
 1. Create a Quicklink to `heed://focus/next` and assign it a hotkey.
-2. Free the combination Heed holds: `defaults write io.github.rbstp.heed focusNextHotkey ''`, then
-   `make restart`.
+2. Free the combination Heed holds: empty the field under **Settings > Shortcuts**, or open
+   `heed://set/focusNextHotkey/none`.
 
 Turning `warpPointer` on is what makes Raycast's own Switch Windows move the pointer too, since that
 is a keyboard-driven focus change like any other.
 
 The flags reach the running agent over a distributed notification, which any process in your login
-session can post and read. Heed holds Accessibility permission, so anything in your session can
-switch it off or move focus around while it runs. The vocabulary is fixed at toggle-and-focus: it
-takes no arbitrary arguments, carries no window contents, and reads nothing back. If that is not a
-trade you want, leave the commands alone and use the hotkeys; nothing else in Heed listens.
+session can post and read, and a `heed://` URL can come from a web page or a document, after the
+browser asks. Heed holds Accessibility permission, so either can switch it off, move focus around,
+or change any setting while it runs: register a combination another app needs, release every
+shortcut, exclude every window, or turn on `verbose`, which writes window titles to the log. Nothing
+is read back. If that is not a trade you want, leave the commands alone and use the hotkeys; nothing
+else in Heed listens.
 
 ## Behavior
 
@@ -214,7 +209,9 @@ forward. The `raise` setting only orders windows within an app.
 
 ## Configuration
 
-Settings live in the `io.github.rbstp.heed` defaults domain. Restart Heed after changing them.
+**Settings** in the menu bar menu holds every setting, and a change takes effect as soon as it is
+made. The keys are what `heed://set/<key>/<value>` and `--set` take. Everything is stored in the
+`io.github.rbstp.heed` defaults domain, and Heed picks up a change to it from anywhere.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -251,13 +248,6 @@ Settings live in the `io.github.rbstp.heed` defaults domain. Restart Heed after 
 | `excludedBundleIDs` | `[]` | Extra application bundle IDs to skip. |
 | `verbose` | `false` | Log each focus decision. |
 
-```sh
-defaults write io.github.rbstp.heed dwellMs -int 200
-defaults write io.github.rbstp.heed excludedBundleIDs -array com.example.Overlay
-defaults write io.github.rbstp.heed excludedWindowTitles -array '^Picture in Picture$'
-make restart
-```
-
 Heed always excludes itself, Dock, WindowServer, loginwindow, Control Center, Notification Center,
 SystemUIServer, the screenshot UI, Spotlight, Raycast, and AltTab.
 
@@ -270,11 +260,9 @@ make probe
 make probe X=960 Y=540
 ```
 
-For per-decision logging:
+For per-decision logging, **Settings > General > Log every decision**, then:
 
 ```sh
-defaults write io.github.rbstp.heed verbose -bool true
-make restart
 make logs
 ```
 

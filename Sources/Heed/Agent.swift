@@ -41,11 +41,14 @@ final class Agent {
     private var config: Config
     private var machine: DwellMachine<Target>
     private var timer: DispatchSourceTimer?
-    private var hangupSource: DispatchSourceSignal?
+    private let defaultsWatcher: DefaultsWatcher
+    private var pendingReload: DispatchWorkItem?
     private let activationWait = ActivationWait()
 
     // Main thread only; `syncMenuBar` and `syncHotkey` are the hops from `queue`.
     private var menuBar: MenuBarController?
+    private var settings: SettingsWindowController?
+    private var refusedShortcuts: Set<Shortcut> = []
     /// Keyed by setting, so a claim can tell a combination that is moving from one that is not.
     private var registrations: [Shortcut: Registration] = [:]
     private var shortcut: HotkeySpec?
@@ -120,6 +123,8 @@ final class Agent {
         config = Config.load()
         Log.verbose = config.verbose
         machine = DwellMachine(dwell: config.dwell)
+        defaultsWatcher = DefaultsWatcher(Config.store(), keys: Config.keys)
+        defaultsWatcher.changed = { [weak self] in self?.scheduleReload() }
     }
 
     // MARK: - Lifecycle
@@ -241,6 +246,26 @@ final class Agent {
         if hitTestAnswered { adoptPointerWindow(target) }
     }
 
+    /// The reload applies it, the way it applies a `defaults write`.
+    func change(_ key: String, to value: Any?) {
+        defaultsWatcher.defaults.set(value, forKey: key)
+    }
+
+    /// Anything in the session can send one, so it is quoted short and on one line.
+    private func quoted(_ text: String) -> String {
+        String(text.prefix(40).map { $0.isNewline ? " " : $0 })
+    }
+
+    /// Writes land one key at a time; one reload covers a run of them.
+    private func scheduleReload() {
+        queue.async { [self] in
+            pendingReload?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.reload() }
+            pendingReload = work
+            queue.asyncAfter(deadline: .now() + 0.05, execute: work)
+        }
+    }
+
     private func reload() {
         queue.async { [self] in
             config = Config.load()
@@ -253,9 +278,19 @@ final class Agent {
             }
             syncMenuBar()
             syncHotkey()
+            DispatchQueue.main.async { [weak self] in self?.settings?.refresh() }
             Log.note("reloaded config: dwell=\(config.dwellMs)ms poll=\(config.pollMs)ms "
                 + "raise=\(config.raise) enabled=\(config.enabled)")
         }
+    }
+
+    func showSettings() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if settings == nil {
+            settings = SettingsWindowController(agent: self)
+            settings?.show(refused: refusedShortcuts)
+        }
+        settings?.present()
     }
 
     // MARK: - Menu bar and hotkeys
@@ -280,7 +315,7 @@ final class Agent {
     private func applyEnabled(_ value: Bool) {
         guard value != config.enabled else { return }
         config.enabled = value
-        Config.store().set(value, forKey: "enabled")
+        change("enabled", to: value)
 
         forgetTarget()
         if isRunning {
@@ -301,6 +336,28 @@ final class Agent {
         case .focusNumber(let number): focusWindow(number)
         case .focusWindowID(let id): focusWindow(id: id)
         case .focusDirection(let direction): focusDirection(direction)
+        case .set(let key, let value):
+            guard let setting = Setting.named(key) else {
+                Log.note("no setting called \"\(quoted(key))\"")
+                return
+            }
+            guard let parsed = setting.parse(value) else {
+                Log.note("\"\(quoted(value))\" is not a value for \(setting.key)")
+                return
+            }
+            change(setting.key, to: parsed)
+        case .reset(let key):
+            guard let setting = Setting.named(key) else {
+                Log.note("no setting called \"\(quoted(key))\"")
+                return
+            }
+            change(setting.key, to: nil)
+        case .releaseHotkeys:
+            for shortcut in Shortcut.allCases { change(shortcut.defaultsKey, to: "") }
+        case .restoreHotkeys:
+            for shortcut in Shortcut.allCases { change(shortcut.defaultsKey, to: nil) }
+        case .openSettings:
+            DispatchQueue.main.async { [self] in showSettings() }
         }
     }
 
@@ -329,7 +386,8 @@ final class Agent {
                             self?.menuBar?.flash(accepted: accepted)
                         }
                     },
-                    onToggleNumbers: { [weak self] in self?.toggleWindowNumbers() }
+                    onToggleNumbers: { [weak self] in self?.toggleWindowNumbers() },
+                    onOpenSettings: { [weak self] in self?.showSettings() }
                 )
             }
             menuBar?.showsNumbers = numbers
@@ -376,6 +434,10 @@ final class Agent {
             registrations = claimed.held
             adopt(specs: claimed.specs, under: under)
             announce(specs: claimed.specs)
+            refusedShortcuts = Set(zip(Shortcut.allCases, texts).compactMap { shortcut, text in
+                HotkeySpec.isOff(text) || claimed.held[shortcut] != nil ? nil : shortcut
+            })
+            settings?.show(refused: refusedShortcuts)
         }
     }
 
@@ -541,7 +603,7 @@ final class Agent {
                 announce(specs: claimed.specs)
 
                 queue.async { [self] in
-                    // A SIGHUP reload can have changed the configuration in between; it wins.
+                    // A reload can have changed the configuration in between; it wins.
                     guard shortcutTexts == current else {
                         Log.note("the configuration changed while \(preset.display) was being "
                             + "applied; keeping what it says instead")
@@ -550,9 +612,8 @@ final class Agent {
                         return
                     }
 
-                    let store = Config.store()
                     for (shortcut, text) in zip(Shortcut.allCases, texts) {
-                        store.set(text, forKey: shortcut.defaultsKey)
+                        change(shortcut.defaultsKey, to: text)
                         config[keyPath: shortcut.keyPath] = text
                     }
                     Log.note("shortcuts now use \(preset.display)")
@@ -740,7 +801,7 @@ final class Agent {
     func toggleWindowNumbers() {
         queue.async { [self] in
             config.windowNumbers.toggle()
-            Config.store().set(config.windowNumbers, forKey: "windowNumbers")
+            change("windowNumbers", to: config.windowNumbers)
             Log.note(config.windowNumbers ? "window numbers on" : "window numbers off")
             syncMenuBar()
         }
@@ -1924,7 +1985,7 @@ final class Agent {
     }
 
     /// Commands from a second copy of the binary, which cannot reach this process's state. Any
-    /// process in the login session can post one; they toggle Heed and move focus, nothing more.
+    /// process in the login session can post one: the switch, focus, and the settings.
     func observeCommands() {
         DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name(commandNotification), object: nil, queue: .main
@@ -1939,16 +2000,6 @@ final class Agent {
             Log.debug("command: \(text)")
             perform(command)
         }
-    }
-
-    /// Installed before the Accessibility gate; otherwise SIGHUP kept its default disposition while
-    /// the agent waited for permission, and KeepAlive hid the resulting exit.
-    func installSignalHandlers() {
-        signal(SIGHUP, SIG_IGN)
-        let source = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
-        source.setEventHandler { [weak self] in self?.reload() }
-        source.resume()
-        hangupSource = source
     }
 
     // MARK: - Diagnostics

@@ -8,6 +8,8 @@ on:
   push:
     branches:
       - master
+    paths-ignore:
+      - .github/**
   schedule:
     - cron: '41 4 * * 1'
 
@@ -37,10 +39,9 @@ jobs:
           languages: swift
           build-mode: manual
 
-      # Between init and analyze on purpose: CodeQL extracts Swift by watching the
-      # compiler, so a build outside that window produces nothing.
+      # Between init and analyze, where the tracer watches the compiler; no manifest sandbox, because the tracer's copy of macOS 27's arm64e-only sandbox-exec cannot spawn.
       - name: build
-        run: swift build
+        run: swift build --disable-sandbox
 
       - name: analyze
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1

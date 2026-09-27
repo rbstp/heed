@@ -9,7 +9,7 @@ DEVID_NAME  := Developer ID Application: RICHARD BOISVERT-ST-PIERRE ($(TEAM_ID))
 # The fallback for anyone without that private key: self-signed, trusted locally, `make cert`.
 CERT_NAME   := Heed Local Signing
 # Latest tag, or 0.0.0 when none is reachable (a shallow CI clone). The release workflow overrides it.
-VERSION     := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+VERSION     := $(shell git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//')
 ifeq ($(VERSION),)
 VERSION     := 0.0.0
 endif

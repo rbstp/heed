@@ -91,6 +91,34 @@
       "subtitle": "Heed",
       "description": "Turn Heed's pointer focus off.",
       "mode": "no-view"
+    },
+    {
+      "name": "release-shortcuts",
+      "title": "Release Shortcuts",
+      "subtitle": "Heed",
+      "description": "Unregister every shortcut Heed holds, so Raycast can have the combinations.",
+      "mode": "no-view"
+    },
+    {
+      "name": "restore-shortcuts",
+      "title": "Restore Shortcuts",
+      "subtitle": "Heed",
+      "description": "Give Heed its default shortcuts back.",
+      "mode": "no-view"
+    },
+    {
+      "name": "warp-on",
+      "title": "Enable Mouse Follows Focus",
+      "subtitle": "Heed",
+      "description": "Move the pointer into the window a command focused.",
+      "mode": "no-view"
+    },
+    {
+      "name": "warp-off",
+      "title": "Disable Mouse Follows Focus",
+      "subtitle": "Heed",
+      "description": "Leave the pointer where it is when a command moves focus.",
+      "mode": "no-view"
     }
   ],
   "dependencies": {
@@ -103,7 +131,7 @@
     "@types/react": "^19.3.0",
     "eslint": "^10.10.0",
     "prettier": "^3.9.8",
-    "typescript": "^7.0.2"
+    "typescript": "^5.8.2"
   },
   "scripts": {
     "build": "ray build",

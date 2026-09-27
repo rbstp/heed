@@ -25,3 +25,8 @@ updates:
           - '*'
     commit-message:
       prefix: chore(raycast)
+    ignore:
+      # @raycast/eslint-config wants typescript <6.1.0 as a peer.
+      - dependency-name: typescript
+        versions:
+          - '>=6.1.0'

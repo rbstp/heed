@@ -83,13 +83,13 @@
             <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> (held), , <span class="kw">shownumbers</span></span><span class="c"><span class="hash">#</span> each window numbered on screen after 100 ms, so the digit is read rather than counted</span></div>
             <div class="line blank"></div>
             <p class="line in c"><span class="hash">#</span> Directional focus, off by default because every bind is taken from every other app. WASD rather than HJKL: the toggle is already on H. A window sharing a row or column with the focused one wins over a closer one that does not, and the edge is a dead end rather than a wrap.</p>
-            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, A, <span class="kw">movefocus</span>, l</span><span class="c"><span class="hash">#</span> defaults write io.github.rbstp.heed focusLeftHotkey 'cmd+ctrl+alt+a'</span></div>
-            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, S, <span class="kw">movefocus</span>, d</span><span class="c"><span class="hash">#</span> focusDownHotkey 'cmd+ctrl+alt+s'</span></div>
-            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, W, <span class="kw">movefocus</span>, u</span><span class="c"><span class="hash">#</span> focusUpHotkey 'cmd+ctrl+alt+w'</span></div>
-            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, D, <span class="kw">movefocus</span>, r</span><span class="c"><span class="hash">#</span> focusRightHotkey 'cmd+ctrl+alt+d'</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, A, <span class="kw">movefocus</span>, l</span><span class="c"><span class="hash">#</span> Settings &gt; Shortcuts, or heed://set/focusLeftHotkey/cmd+ctrl+alt+a</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, S, <span class="kw">movefocus</span>, d</span><span class="c"><span class="hash">#</span> focusDownHotkey cmd+ctrl+alt+s</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, W, <span class="kw">movefocus</span>, u</span><span class="c"><span class="hash">#</span> focusUpHotkey cmd+ctrl+alt+w</span></div>
+            <div class="line bind"><span class="lhs"><span class="key">bind</span><span class="eq">=</span><span class="var">$mod</span> ALT, D, <span class="kw">movefocus</span>, r</span><span class="c"><span class="hash">#</span> focusRightHotkey cmd+ctrl+alt+d</span></div>
             <div class="line blank"></div>
-            <p class="line in c"><span class="hash">#</span> A hotkey needs at least one modifier other than Shift. If another app already registered it, Heed logs the refusal and registers nothing. An empty string disables a bind. The menu offers Command-Option with a warning and does not offer Command-Shift at all; <code>defaults write</code> accepts either.</p>
-            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f' &amp;&amp; make restart</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed hotkey 'cmd+ctrl+alt+f' && make restart">copy</button></div>
+            <p class="line in c"><span class="hash">#</span> A hotkey needs at least one modifier other than Shift. If another app already registered it, Heed logs the refusal and registers nothing. An empty field disables a bind. The menu offers Command-Option with a warning and does not offer Command-Shift at all; a Settings field accepts either.</p>
+            <div class="line cmd"><span class="prompt">$</span><code>open heed://set/hotkey/cmd+ctrl+alt+f</code><button class="copy" type="button" data-copy="open heed://set/hotkey/cmd+ctrl+alt+f">copy</button></div>
             <p class="line"><span class="brace">}</span></p>
         </section>
 
@@ -101,7 +101,7 @@
             <div class="line kv"><span class="key">warpPointer</span><span class="eq">=</span><span class="val bool">false</span><span class="c"><span class="hash">#</span> Move the pointer into a window that took keyboard focus. Needs handoverGuard on.</span></div>
             <div class="line kv"><span class="key">warpX</span><span class="eq">=</span><span class="val num">50</span><span class="c"><span class="hash">#</span> Where in that window the pointer lands, as a percentage across.</span></div>
             <div class="line kv"><span class="key">warpY</span><span class="eq">=</span><span class="val num">50</span><span class="c"><span class="hash">#</span> Where in that window the pointer lands, as a percentage down.</span></div>
-            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed warpPointer -bool true &amp;&amp; make restart</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed warpPointer -bool true && make restart">copy</button></div>
+            <div class="line cmd"><span class="prompt">$</span><code>open heed://set/warpPointer/true</code><button class="copy" type="button" data-copy="open heed://set/warpPointer/true">copy</button></div>
             <p class="line"><span class="brace">}</span></p>
         </section>
 
@@ -117,15 +117,15 @@
             <div class="line cmd"><span class="prompt">$</span><code>~/Applications/Heed.app/Contents/MacOS/Heed --windows</code><span class="c"># the focus ring as JSON, whether or not Heed is running</span></div>
             <div class="line blank"></div>
             <p class="line in c"><span class="hash">#</span> <strong>With Raycast.</strong> Raycast already tiles and switches windows; Heed adds the pointer. The <a href="https://github.com/rbstp/heed/tree/master/raycast">extension</a> has a command for each of these, so the hotkey is Raycast's and Heed claims nothing. Or a Quicklink to <code>heed://focus/next</code> with a hotkey, then free the combination Heed holds:</p>
-            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed focusNextHotkey '' &amp;&amp; make restart</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed focusNextHotkey '' && make restart">copy</button></div>
+            <div class="line cmd"><span class="prompt">$</span><code>open heed://set/focusNextHotkey/none</code><button class="copy" type="button" data-copy="open heed://set/focusNextHotkey/none">copy</button></div>
             <div class="line blank"></div>
-            <p class="line in c"><span class="hash">#</span> The flags reach the agent over a distributed notification, which any process in your login session can post and read. Heed holds Accessibility permission, so anything in your session can switch it off or move focus around while it runs. The vocabulary is fixed at toggle-and-focus: no arbitrary arguments, no window contents, nothing read back. If that is not a trade you want, leave the commands alone and use the binds; nothing else in Heed listens.</p>
+            <p class="line in c"><span class="hash">#</span> The flags reach the agent over a distributed notification, which any process in your login session can post and read. A <code>heed://</code> URL can come from a web page or a document, after the browser asks. Heed holds Accessibility permission, so either can switch it off, move focus around, or change any setting while it runs, shortcuts and exclusions included. Nothing is read back. If that is not a trade you want, leave the commands alone and use the binds; nothing else in Heed listens.</p>
             <p class="line"><span class="brace">}</span></p>
         </section>
 
         <div class="line blank"></div>
 
-        <p class="line c"><span class="hash">#</span> Settings live in the <code>io.github.rbstp.heed</code> defaults domain, flat: <code>defaults write io.github.rbstp.heed &lt;key&gt; &lt;value&gt;</code>, then restart Heed. The blocks below group them for reading; the values are the defaults.</p>
+        <p class="line c"><span class="hash">#</span> <strong>Settings</strong> in the menu bar menu holds every setting, and a change takes effect as soon as it is made. The keys are what <code>heed://set/&lt;key&gt;/&lt;value&gt;</code> takes. The blocks below group them for reading; the values are the defaults.</p>
         <div class="line blank"></div>
 
         <section class="block" id="general">
@@ -183,8 +183,8 @@
             <p class="line in c"><span class="hash">#</span> Heed always excludes itself, Dock, WindowServer, loginwindow, Control Center, Notification Center, SystemUIServer, the screenshot UI, Spotlight, Raycast and AltTab.</p>
             <div class="line kv"><span class="key">excludedWindowTitles</span><span class="eq">=</span><span class="val">[]</span><span class="c"><span class="hash">#</span> Case-insensitive regular expressions for window titles to skip.</span></div>
             <div class="line kv"><span class="key">excludedBundleIDs</span><span class="eq">=</span><span class="val">[]</span><span class="c"><span class="hash">#</span> Extra application bundle IDs to skip.</span></div>
-            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed excludedWindowTitles -array '^Picture in Picture$'</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed excludedWindowTitles -array '^Picture in Picture$'">copy</button></div>
-            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed excludedBundleIDs -array com.example.Overlay</code></div>
+            <div class="line cmd"><span class="prompt">$</span><code>open 'heed://set/excludedWindowTitles/^Picture in Picture$'</code><button class="copy" type="button" data-copy="open 'heed://set/excludedWindowTitles/^Picture in Picture$'">copy</button></div>
+            <div class="line cmd"><span class="prompt">$</span><code>open heed://set/excludedBundleIDs/com.example.Overlay</code></div>
             <p class="line"><span class="brace">}</span></p>
         </section>
 
@@ -194,7 +194,7 @@
             <h2 class="line open"><span class="name">troubleshooting</span> <span class="brace">{</span></h2>
             <p class="line in c"><span class="hash">#</span> See what Heed sees under the pointer, or at a point, and log each decision. The log is append-only; <code>make logs-clear</code> truncates it.</p>
             <div class="line cmd"><span class="prompt">$</span><code>make probe</code><span class="c"># or make probe X=960 Y=540</span></div>
-            <div class="line cmd"><span class="prompt">$</span><code>defaults write io.github.rbstp.heed verbose -bool true &amp;&amp; make restart &amp;&amp; make logs</code><button class="copy" type="button" data-copy="defaults write io.github.rbstp.heed verbose -bool true && make restart && make logs">copy</button></div>
+            <div class="line cmd"><span class="prompt">$</span><code>open heed://set/verbose/true &amp;&amp; make logs</code><button class="copy" type="button" data-copy="open heed://set/verbose/true && make logs">copy</button></div>
             <div class="line blank"></div>
             <p class="line in c"><span class="hash">#</span> <strong>Accessibility stopped working after an upgrade.</strong> Releases from 0.12.0 on are signed with a Developer ID and notarized, so the grant carries across versions. Upgrading from an older, ad-hoc signed build is the one exception: that grant was tied to the old binary and cannot transfer. If Heed stays dimmed:</p>
             <div class="line cmd"><span class="prompt">$</span><code>tccutil reset Accessibility io.github.rbstp.heed</code><button class="copy" type="button" data-copy="tccutil reset Accessibility io.github.rbstp.heed">copy</button></div>

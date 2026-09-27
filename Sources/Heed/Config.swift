@@ -95,6 +95,8 @@ struct Config {
         return UserDefaults(suiteName: bundleID) ?? .standard
     }
 
+    static let keys: [String] = Setting.all.map(\.key)
+
     static func load() -> Config {
         var config = Config()
         config.excludedBundleIDs = builtinExclusions
@@ -102,46 +104,27 @@ struct Config {
 
         let defaults = store()
 
-        func int(_ key: String, _ current: Int, _ limits: ClosedRange<Int>) -> Int {
-            guard defaults.object(forKey: key) != nil else { return current }
-            let given = defaults.integer(forKey: key)
-            let clamped = min(max(given, limits.lowerBound), limits.upperBound)
-            if clamped != given {
-                Log.note("\(key)=\(given) is outside \(limits.lowerBound)...\(limits.upperBound); "
-                    + "using \(clamped)")
+        for setting in Setting.all {
+            switch setting.kind {
+            case .bool(let path):
+                guard defaults.object(forKey: setting.key) != nil else { continue }
+                config[keyPath: path] = defaults.bool(forKey: setting.key)
+            case .int(let path, let limits):
+                guard defaults.object(forKey: setting.key) != nil else { continue }
+                let given = defaults.integer(forKey: setting.key)
+                let clamped = min(max(given, limits.lowerBound), limits.upperBound)
+                if clamped != given {
+                    Log.note("\(setting.key)=\(given) is outside \(limits.lowerBound)...\(limits.upperBound); "
+                        + "using \(clamped)")
+                }
+                config[keyPath: path] = clamped
+            case .hotkey(let shortcut):
+                guard let text = defaults.string(forKey: setting.key) else { continue }
+                config[keyPath: shortcut.keyPath] = text
+            case .strings:
+                break
             }
-            return clamped
         }
-        func bool(_ key: String, _ current: Bool) -> Bool {
-            defaults.object(forKey: key) == nil ? current : defaults.bool(forKey: key)
-        }
-
-        config.enabled = bool("enabled", config.enabled)
-        config.menuBarIcon = bool("menuBarIcon", config.menuBarIcon)
-        for shortcut in Shortcut.allCases {
-            guard let text = defaults.string(forKey: shortcut.defaultsKey) else { continue }
-            config[keyPath: shortcut.keyPath] = text
-        }
-        config.windowNumbers = bool("windowNumbers", config.windowNumbers)
-        config.windowNumbersDelayMs = int("windowNumbersDelayMs", config.windowNumbersDelayMs, 0...2_000)
-        config.warpPointer = bool("warpPointer", config.warpPointer)
-        config.warpX = int("warpX", config.warpX, 0...100)
-        config.warpY = int("warpY", config.warpY, 0...100)
-        config.dwellMs = int("dwellMs", config.dwellMs, 0...5_000)
-        config.pollMs = int("pollMs", config.pollMs, 10...1_000)
-        config.idlePollMs = int("idlePollMs", config.idlePollMs, 100...10_000)
-        config.raise = bool("raise", config.raise)
-        config.typingCooldownMs = int("typingCooldownMs", config.typingCooldownMs, 0...5_000)
-        config.clickGraceMs = int("clickGraceMs", config.clickGraceMs, 0...2_000)
-        config.verifyTimeoutMs = int("verifyTimeoutMs", config.verifyTimeoutMs, 20...2_000)
-        config.entryMotionPx = int("entryMotionPx", config.entryMotionPx, 0...200)
-        config.handoverGuard = bool("handoverGuard", config.handoverGuard)
-        config.handoverSettleMs = int("handoverSettleMs", config.handoverSettleMs, 0...5_000)
-        config.ignoreWhenCommandHeld = bool("ignoreWhenCommandHeld", config.ignoreWhenCommandHeld)
-        config.menuGuard = bool("menuGuard", config.menuGuard)
-        config.requireStandardWindow = bool("requireStandardWindow", config.requireStandardWindow)
-        config.promptGuard = bool("promptGuard", config.promptGuard)
-        config.verbose = bool("verbose", config.verbose)
 
         config.excludedBundleIDs.formUnion(defaults.stringArray(forKey: "excludedBundleIDs") ?? [])
 

@@ -9,7 +9,8 @@ func accessibilityTrusted(prompt: Bool) -> Bool {
 }
 
 let usage = "usage: Heed [--probe [X Y]] [--windows] [--toggle] [--on] [--off] "
-    + "[--focus next|previous|left|right|up|down|<number>]\n"
+    + "[--focus next|previous|left|right|up|down|<number>] "
+    + "[--set <key> <value>] [--reset <key>] [--hotkeys release|restore] [--settings]\n"
 
 let agent = Agent()
 
@@ -52,11 +53,10 @@ app.setActivationPolicy(.accessory)
 
 Log.note("Heed starting (\(bundleID))")
 
-// All before the permission gate, so a reload, the switch and the commands work while the grant is
-// still outstanding.
+// All before the permission gate, so the switch and the commands work while the grant is still
+// outstanding.
 let delegate = AppDelegate(agent: agent)
 app.delegate = delegate
-agent.installSignalHandlers()
 agent.installMenuBar()
 agent.observeCommands()
 var permissionWaiter: DispatchSourceTimer?

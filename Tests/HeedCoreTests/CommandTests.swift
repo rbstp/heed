@@ -29,6 +29,23 @@ final class CommandTests: XCTestCase {
         XCTAssertEqual(parseCommand("/toggle/"), .toggle)
     }
 
+    func testTheSettingVerbs() {
+        XCTAssertEqual(parseCommand("set/warpPointer/true"), .set(key: "warpPointer", value: "true"))
+        XCTAssertEqual(parseCommand("set/focusNextHotkey/cmd+ctrl+right"),
+                       .set(key: "focusNextHotkey", value: "cmd+ctrl+right"))
+        XCTAssertEqual(parseCommand("Set/excludedWindowTitles/^a/b$"),
+                       .set(key: "excludedWindowTitles", value: "^a/b$"), "a value keeps its slashes and case")
+        XCTAssertEqual(parseCommand("reset/dwellMs"), .reset(key: "dwellMs"))
+        XCTAssertEqual(parseCommand("hotkeys/release"), .releaseHotkeys)
+        XCTAssertEqual(parseCommand("hotkeys/Restore"), .restoreHotkeys)
+        XCTAssertEqual(parseCommand("settings"), .openSettings)
+        XCTAssertNil(parseCommand("settings/general"))
+        XCTAssertNil(parseCommand("set/warpPointer"))
+        XCTAssertNil(parseCommand("reset"))
+        XCTAssertNil(parseCommand("reset/a/b"))
+        XCTAssertNil(parseCommand("hotkeys/all"))
+    }
+
     func testUnknownVerbsAreRefused() {
         XCTAssertNil(parseCommand("quit"))
         XCTAssertNil(parseCommand("focus"))
@@ -69,6 +86,9 @@ final class CommandTests: XCTestCase {
         let commands: [HeedCommand] = [
             .toggle, .enable, .disable, .focusStep(1), .focusStep(-1),
             .focusNumber(1), .focusNumber(9), .focusNumber(23), .focusWindowID(48213),
+            .set(key: "warpPointer", value: "true"), .set(key: "focusNextHotkey", value: "none"),
+            .set(key: "excludedWindowTitles", value: "^a//b $, c"), .reset(key: "dwellMs"),
+            .releaseHotkeys, .restoreHotkeys, .openSettings,
         ] + FocusDirection.allCases.map { .focusDirection($0) }
 
         for command in commands {
@@ -89,6 +109,11 @@ final class CommandFrontDoorTests: XCTestCase {
         XCTAssertEqual(url("heed://toggle"), .toggle)
         XCTAssertEqual(url("heed://on"), .enable)
         XCTAssertEqual(url("heed://focus/next"), .focusStep(1))
+        XCTAssertEqual(url("heed://set/warpPointer/true"), .set(key: "warpPointer", value: "true"))
+        XCTAssertEqual(url("heed://set/excludedWindowTitles/^a/b$"),
+                       .set(key: "excludedWindowTitles", value: "^a/b$"))
+        XCTAssertEqual(url("heed://hotkeys/release"), .releaseHotkeys)
+        XCTAssertEqual(url("heed://settings"), .openSettings)
         XCTAssertEqual(url("heed://focus/previous"), .focusStep(-1))
         XCTAssertEqual(url("heed://focus/left"), .focusDirection(.left))
         XCTAssertEqual(url("heed://focus/7"), .focusNumber(7))
@@ -118,6 +143,10 @@ final class CommandFrontDoorTests: XCTestCase {
         XCTAssertEqual(commandLineRequest(["Heed", "--focus", "up"]),
                        .command(.focusDirection(.up)))
         XCTAssertEqual(commandLineRequest(["Heed", "--focus", "2"]), .command(.focusNumber(2)))
+        XCTAssertEqual(commandLineRequest(["Heed", "--set", "warpPointer", "on"]),
+                       .command(.set(key: "warpPointer", value: "on")))
+        XCTAssertEqual(commandLineRequest(["Heed", "--reset", "dwellMs"]), .command(.reset(key: "dwellMs")))
+        XCTAssertEqual(commandLineRequest(["Heed", "--hotkeys", "release"]), .command(.releaseHotkeys))
     }
 
     /// Launchd starts Heed with no arguments at all, and macOS can add a `-psn_` one.

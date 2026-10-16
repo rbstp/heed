@@ -113,7 +113,7 @@ install: bundle
 	@echo "It is picked up automatically -- no restart needed. Watch it with: make logs"
 
 restart:
-	-pkill -x $(APP_NAME)
+	pkill -x $(APP_NAME) || true
 	@for i in $$(seq 30); do pgrep -x $(APP_NAME) >/dev/null || break; sleep 0.1; done
 	open "$(APP)"
 
@@ -221,7 +221,7 @@ requirement:
 	fi
 
 uninstall:
-	-pkill -x $(APP_NAME)
+	pkill -x $(APP_NAME) || true
 	-launchctl bootout $(DOMAIN)/$(BUNDLE_ID) 2>/dev/null
 	rm -f "$(AGENT_PLIST)"
 	rm -rf "$(APP)"

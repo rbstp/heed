@@ -380,7 +380,10 @@ final class Agent {
             if menuBar == nil {
                 menuBar = MenuBarController(
                     onClick: { [weak self] in self?.toggleEnabled() },
-                    onQuit: { quitHeed() },
+                    onQuit: {
+                        Log.note("quitting")
+                        NSApp.terminate(nil)
+                    },
                     onChooseModifier: { [weak self] preset in
                         self?.changeModifiers(to: preset) { accepted in
                             self?.menuBar?.flash(accepted: accepted)

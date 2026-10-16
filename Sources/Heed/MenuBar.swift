@@ -105,6 +105,12 @@ final class MenuBarController: NSObject {
         numbers.toolTip = "Number the windows while the shortcut modifier is held, so the window "
             + "to switch to can be read off the screen."
         menu.addItem(numbers)
+
+        let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLoginItem),
+                               keyEquivalent: "")
+        login.target = self
+        login.state = LoginItem.enabled ? .on : .off
+        menu.addItem(login)
         menu.addItem(.separator())
 
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -120,7 +126,6 @@ final class MenuBarController: NSObject {
         let quit = NSMenuItem(title: "Quit Heed", action: #selector(quitFromMenu),
                               keyEquivalent: "q")
         quit.target = self
-        quit.toolTip = quitPlan.tooltip
         menu.addItem(quit)
 
         return menu
@@ -189,6 +194,10 @@ final class MenuBarController: NSObject {
         onToggleNumbers()
     }
 
+    @objc private func toggleLoginItem() {
+        LoginItem.set(!LoginItem.enabled)
+    }
+
     @objc private func openSettings() {
         onOpenSettings()
     }
@@ -198,13 +207,11 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func openLog() {
-        let url = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Logs/heed.log")
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            Log.note("no log at \(url.path) yet")
+        guard FileManager.default.fileExists(atPath: Log.url.path) else {
+            Log.note("no log at \(Log.url.path) yet")
             return
         }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(Log.url)
     }
 
     private static var version: String {

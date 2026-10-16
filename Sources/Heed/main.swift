@@ -51,7 +51,9 @@ case .none:
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
+Log.toFileUnlessTerminal()
 Log.note("Heed starting (\(bundleID))")
+LoginItem.registerOnce()
 
 // All before the permission gate, so the switch and the commands work while the grant is still
 // outstanding.
@@ -64,8 +66,7 @@ var permissionWaiter: DispatchSourceTimer?
 if accessibilityTrusted(prompt: true) {
     agent.start()
 } else {
-    // Prompt once and wait: exiting would make KeepAlive respawn and prompt forever, and prompting
-    // on every check would put the dialog up every two seconds.
+    // Prompt once and wait: prompting on every check would put the dialog up every two seconds.
     Log.note("not trusted for Accessibility yet -- grant it in "
         + "System Settings > Privacy & Security > Accessibility. Waiting.")
 

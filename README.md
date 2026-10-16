@@ -28,8 +28,10 @@ make cert      # once, and only without a Developer ID; keeps the Accessibility 
 make install   # build, sign, install, start
 ```
 
-On first launch, grant Heed access in **System Settings > Privacy & Security > Accessibility**. It
-picks the grant up without a restart.
+Open Heed once after installing it. On that first launch it asks for **System Settings > Privacy &
+Security > Accessibility**, and picks the grant up without a restart; it also adds itself to your
+login items, which **Open at Login** in its menu or **System Settings > General > Login Items** turns
+off again.
 
 Other targets: `make restart`, `make logs`, `make uninstall`.
 
@@ -47,8 +49,8 @@ gh attestation verify Heed-0.12.3.zip --repo rbstp/heed
   Heed is on and is empty while it is off. A dim icon means Heed cannot work, because it is off or
   has no Accessibility permission; hover to see which.
 - **Right-click** (or control-click) it to change the shortcut modifier, switch the window numbers
-  on or off, open Settings, open the log, see the version, or quit. Quitting unloads the login agent
-  until the next login.
+  on or off, choose whether Heed opens at login, open Settings, open the log, see the version, or
+  quit.
 - **Control+Command+H** toggles Heed from anywhere.
 - **Control+Command+Right / Left** moves keyboard focus to the next or previous visible window,
   screen by screen from left to right, then left to right within each screen. A window focused this

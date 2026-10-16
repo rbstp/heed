@@ -46,13 +46,6 @@ NOTARY_PROFILE := heed
 NOTARY_AUTH := $(if $(NOTARY_KEY),--key "$(NOTARY_KEY)" --key-id "$(NOTARY_KEY_ID)" \
                  --issuer "$(NOTARY_ISSUER)",--keychain-profile "$(NOTARY_PROFILE)")
 
-# sed cannot be trusted with these characters in the generated plists.
-define check_paths
-@case '$(EXECUTABLE)$(LOG)' in \
-	*['&|<>']*) echo "a path contains a character that would corrupt the plists: $(EXECUTABLE)"; \
-	            exit 1;; \
-esac
-endef
 BUILT       := .build/release/$(APP_NAME)
 ICON_TOOL   := .build/release/heed-icon
 ICON_SRC    := Sources/IconTool/main.swift Sources/HeedCore/Glyph.swift
@@ -61,7 +54,7 @@ STAGE       := .build/stage
 DIST        := .build/dist
 ZIP         := $(DIST)/$(APP_NAME)-$(VERSION).zip
 
-.PHONY: all build test bundle dist notarize install install-agent uninstall restart logs \
+.PHONY: all build test bundle dist notarize install uninstall restart logs \
         logs-clear probe icon cert check-package reset-permission requirement clean
 
 all: build
@@ -98,12 +91,10 @@ bundle: build $(ICNS)
 		echo "  make bundle ADHOC=1   sign ad-hoc deliberately (permission resets each rebuild)"; \
 		exit 1; \
 	fi
-	$(check_paths)
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	cp "$(BUILT)" "$(EXECUTABLE)"
 	cp "$(ICNS)" "$(APP)/Contents/Resources/$(APP_NAME).icns"
-	cp LaunchAgent/agent.plist.in "$(APP)/Contents/Resources/agent.plist.in"
 	sed -e 's|@BUNDLE_ID@|$(BUNDLE_ID)|g' \
 	    -e 's|@APP_NAME@|$(APP_NAME)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \
@@ -111,34 +102,20 @@ bundle: build $(ICNS)
 	codesign --force --sign "$(CODESIGN_ID)" --identifier "$(BUNDLE_ID)" $(CODESIGN_OPTS) "$(APP)"
 	@echo "built $(APP), signed by $(SIGNED_BY)"
 
-# install-agent runs from the recipe: as a prerequisite, `make -j` could bootstrap it before the
-# bundle existed.
+# Earlier versions ran under a login agent, which would start a second copy at the next login.
 install: bundle
-	@$(MAKE) --no-print-directory install-agent
+	-launchctl bootout $(DOMAIN)/$(BUNDLE_ID) 2>/dev/null
+	rm -f "$(AGENT_PLIST)"
+	@$(MAKE) --no-print-directory restart
 	@echo
 	@echo "Installed. If this is the first run, grant Accessibility to $(APP_NAME) in"
 	@echo "System Settings > Privacy & Security > Accessibility."
 	@echo "It is picked up automatically -- no restart needed. Watch it with: make logs"
 
-## Load the login agent. Regenerated every time: the contents depend on APP_NAME and $(HOME).
-install-agent:
-	$(check_paths)
-	mkdir -p "$(HOME)/Library/LaunchAgents"
-	sed -e 's|@BUNDLE_ID@|$(BUNDLE_ID)|g' \
-	    -e 's|@EXECUTABLE@|$(EXECUTABLE)|g' \
-	    -e 's|@LOG@|$(LOG)|g' \
-	    LaunchAgent/agent.plist.in > "$(AGENT_PLIST)"
-	-launchctl bootout $(DOMAIN)/$(BUNDLE_ID) 2>/dev/null
-	@# bootout returns before the job is gone; bootstrapping into that window fails with EIO.
-	@for i in $$(seq 30); do \
-		launchctl print $(DOMAIN)/$(BUNDLE_ID) >/dev/null 2>&1 || break; \
-		sleep 0.1; \
-	done
-	launchctl bootstrap $(DOMAIN) "$(AGENT_PLIST)"
-	@echo "agent loaded: $(BUNDLE_ID)"
-
 restart:
-	launchctl kickstart -k $(DOMAIN)/$(BUNDLE_ID)
+	-pkill -x $(APP_NAME)
+	@for i in $$(seq 30); do pgrep -x $(APP_NAME) >/dev/null || break; sleep 0.1; done
+	open "$(APP)"
 
 logs:
 	@touch "$(LOG)"; tail -f "$(LOG)"
@@ -188,11 +165,6 @@ check-package:
 	@$(MAKE) --no-print-directory bundle ADHOC=1 INSTALL_DIR="$(STAGE)"
 	codesign --verify --deep --strict "$(STAGE)/$(APP_NAME).app"
 	plutil -lint "$(STAGE)/$(APP_NAME).app/Contents/Info.plist"
-	@sed -e 's|@BUNDLE_ID@|$(BUNDLE_ID)|g' \
-	     -e 's|@EXECUTABLE@|$(STAGE)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)|g' \
-	     -e 's|@LOG@|$(STAGE)/heed.log|g' \
-	     "$(STAGE)/$(APP_NAME).app/Contents/Resources/agent.plist.in" > "$(STAGE)/agent.plist"
-	plutil -lint "$(STAGE)/agent.plist"
 	@test -s "$(STAGE)/$(APP_NAME).app/Contents/Resources/$(APP_NAME).icns" \
 		|| { echo "the bundle has no icon"; exit 1; }
 	@rc=0; "$(STAGE)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)" --probe >/dev/null 2>&1 || rc=$$?; \
@@ -232,7 +204,7 @@ endif
 ## Clear the stale Accessibility grant after a rebuild, so macOS prompts again.
 reset-permission:
 	tccutil reset Accessibility $(BUNDLE_ID)
-	-launchctl kickstart -k $(DOMAIN)/$(BUNDLE_ID)
+	-@$(MAKE) --no-print-directory restart
 
 ## Print the designated requirement; codesign emits it as a comment, hence -o rather than an anchor.
 requirement:
@@ -249,10 +221,11 @@ requirement:
 	fi
 
 uninstall:
+	-pkill -x $(APP_NAME)
 	-launchctl bootout $(DOMAIN)/$(BUNDLE_ID) 2>/dev/null
 	rm -f "$(AGENT_PLIST)"
 	rm -rf "$(APP)"
-	@echo "removed the agent and $(APP)"
+	@echo "removed $(APP)"
 	@echo "note: the Accessibility entry remains listed; clear it with"
 	@echo "  tccutil reset Accessibility $(BUNDLE_ID)"
 

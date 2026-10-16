@@ -45,8 +45,8 @@ In scope, roughly in the order of how much they would worry me:
   scheme, the command line interface and the shortcuts Heed takes away from other apps -- Heed holds
   an Accessibility grant, so acting on its behalf means driving other applications' windows,
 - anything that reads or changes what Heed sees of other applications beyond focusing their windows,
-- the `io.github.rbstp.heed` defaults domain and the LaunchAgent plist as privilege escalation: a
-  value or a path that turns into code Heed runs,
+- the `io.github.rbstp.heed` defaults domain as privilege escalation: a value that turns into code
+  Heed runs,
 - the release path -- the signed and notarized archive, its checksum, the Homebrew cask, and the
   workflow that produces them.
 

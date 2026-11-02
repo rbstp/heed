@@ -122,12 +122,12 @@
     }
   ],
   "dependencies": {
-    "@raycast/api": "^2.9.0",
+    "@raycast/api": "^2.10.1",
     "@raycast/utils": "^2.3.3"
   },
   "devDependencies": {
     "@raycast/eslint-config": "^2.2.0",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "eslint": "^10.13.0",
     "prettier": "^3.9.10",
